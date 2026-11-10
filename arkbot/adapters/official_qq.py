@@ -9,7 +9,12 @@
 
 已知能力差异（相对 OneBot 通道）：
   - 群里只有被 @ 时才会收到消息（官方限制）
-  - 只能回复、不能主动发起新会话（被动回复窗口内可主动）
+  - 主动消息：不携带 msg_id 的发送即主动消息，有频控
+    （认证 60/qpm、未认证 30/qpm，每群每天 1000 条接收上限）；
+    本适配器内置 30/qpm 保守限速，超限时抛 429，由框架降级到
+    离线发件箱延迟补发 —— 主动消息「延后」而不是「丢失」
+  - 数字 QQ 号 ↔ openid 映射：从收到的事件自动学习（CRC32 稳定伪 ID），
+    插件照旧用数字 ID 调 send_group_msg/send_private_msg，本通道自动换算
   - 图片等富媒体需走富媒体接口（本适配器先支持文本 + 预留）
 
 配置示例（bot.toml）::
@@ -29,9 +34,12 @@ import asyncio
 import json
 import logging
 import random
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
+from collections import deque
 from typing import Any
 
 import websockets
@@ -45,6 +53,16 @@ logger = logging.getLogger("arkbot.adapter.official_qq")
 # 官方 API 意图位：群@消息(1<<25=33554432) | C2C(1<<12=4096)
 DEFAULT_INTENTS = 1 << 25 | 1 << 12
 TOKEN_REFRESH_MARGIN = 600  # 提前 10 分钟刷新 access_token
+
+
+def _pseudo_id(openid: str) -> int:
+    """openid → 稳定伪数字 ID（CRC32 取正）。
+
+    官方 API 只发 openid，OneBot 生态用数字 QQ 号；插件层统一用数字 ID，
+    本映射在同一进程内稳定（同 openid 永远得到同数字），重启后事件
+    会重新学习填充。
+    """
+    return zlib.crc32(openid.encode("utf-8")) & 0x7FFFFFFF
 
 
 class OfficialQQAdapter(Adapter):
@@ -76,6 +94,12 @@ class OfficialQQAdapter(Adapter):
         self._connected = asyncio.Event()
         self._seq: int = 0
         self._msg_seq = random.randint(1, 10000)
+        # 数字 ID ↔ openid 映射（从收到的事件自动学习）
+        self._group_openid_by_id: dict[int, str] = {}
+        self._user_openid_by_id: dict[int, str] = {}
+        # 主动消息限速：滑动窗口 60s（默认 30/qpm，未认证档保守值）
+        self.active_rate_limit: int = 30
+        self._active_times: deque[float] = deque()
 
     # ---------------- token ----------------
 
@@ -190,40 +214,52 @@ class OfficialQQAdapter(Adapter):
         if content.startswith("<@!"):
             content = content.split(">", 1)[-1].strip()
 
+        # openid → 稳定伪数字 ID（CRC32）：插件层照旧用数字 ID 工作，
+        # 主动发送时本通道据此反查 openid
+        user_id = 0
+        group_id = 0
+        official: dict[str, Any] = {}
         raw: dict[str, Any]
         if etype == "GROUP_AT_MESSAGE_CREATE":
+            group_openid = str(d.get("group_openid") or "")
+            member_openid = str((d.get("author") or {}).get("member_openid") or "")
+            group_id = self._learn_group(group_openid)
+            user_id = self._learn_user(member_openid)
+            official = {
+                "group_openid": group_openid,
+                "member_openid": member_openid,
+                "msg_id": str(d.get("id") or d.get("msg_id") or ""),
+            }
             raw = {
                 "post_type": "message",
                 "message_type": "group",
                 "sub_type": "normal",
                 "message_id": 0,
-                "user_id": 0,
-                "group_id": 0,
+                "user_id": user_id,
+                "group_id": group_id,
                 "message": [{"type": "text", "data": {"text": content}}],
                 "raw_message": content,
-                "sender": {"user_id": 0, "nickname": "official-user"},
-                # 官方通道特有：openid 与 msg_id，回复时要用
-                "_official": {
-                    "group_openid": str(d.get("group_openid") or ""),
-                    "member_openid": str((d.get("author") or {}).get("member_openid") or ""),
-                    "msg_id": str(d.get("id") or d.get("msg_id") or ""),
-                },
+                "sender": {"user_id": user_id, "nickname": "official-user"},
+                "_official": official,
             }
         elif etype == "C2C_MESSAGE_CREATE":
+            user_openid = str((d.get("author") or {}).get("user_openid") or "")
+            user_id = self._learn_user(user_openid)
+            official = {
+                "user_openid": user_openid,
+                "msg_id": str(d.get("id") or d.get("msg_id") or ""),
+            }
             raw = {
                 "post_type": "message",
                 "message_type": "private",
                 "sub_type": "friend",
                 "message_id": 0,
-                "user_id": 0,
+                "user_id": user_id,
                 "group_id": 0,
                 "message": [{"type": "text", "data": {"text": content}}],
                 "raw_message": content,
-                "sender": {"user_id": 0, "nickname": "official-user"},
-                "_official": {
-                    "user_openid": str((d.get("author") or {}).get("user_openid") or ""),
-                    "msg_id": str(d.get("id") or d.get("msg_id") or ""),
-                },
+                "sender": {"user_id": user_id, "nickname": "official-user"},
+                "_official": official,
             }
         else:
             # 其余官方事件（频道、进群等）暂不翻译，记录后忽略
@@ -233,6 +269,18 @@ class OfficialQQAdapter(Adapter):
         if isinstance(ev, MessageEvent):
             ev.to_me = to_me
         return ev
+
+    def _learn_group(self, openid: str) -> int:
+        pseudo = _pseudo_id(openid)
+        if openid:
+            self._group_openid_by_id.setdefault(pseudo, openid)
+        return pseudo
+
+    def _learn_user(self, openid: str) -> int:
+        pseudo = _pseudo_id(openid)
+        if openid:
+            self._user_openid_by_id.setdefault(pseudo, openid)
+        return pseudo
 
     # ---------------- 回复（按官方协议语义） ----------------
 
@@ -287,6 +335,26 @@ class OfficialQQAdapter(Adapter):
         self._msg_seq += 1
         return self._msg_seq
 
+    async def _rate_gate(self, action: str) -> None:
+        """主动消息滑动窗口限速（默认 30/qpm）。
+
+        超限抛 retcode=429：Bot 门面会将其视为「本通道暂不可用」，
+        降级到其他通道或离线发件箱延迟补发。
+        """
+        now = time.monotonic()
+        while self._active_times and now - self._active_times[0] > 60.0:
+            self._active_times.popleft()
+        if len(self._active_times) >= self.active_rate_limit:
+            raise ApiError(action, 429, f"官方通道主动消息限速（{self.active_rate_limit}/分钟）")
+        self._active_times.append(now)
+
+    @classmethod
+    def _message_param_to_text(cls, message: Any) -> str:
+        """OneBot 风格 message 参数（list 段数组 / CQ 字符串 / MessageChain）→ 官方纯文本。"""
+        if isinstance(message, MessageChain):
+            return cls._chain_to_official_text(message)
+        return cls._chain_to_official_text(MessageChain.parse(message))
+
     # ---------------- call_api（统一门面走官方 HTTP） ----------------
 
     async def call_api(self, action: str, params: dict[str, Any] | None = None) -> Any:
@@ -295,6 +363,37 @@ class OfficialQQAdapter(Adapter):
             return {"online": self.is_connected, "good": self.is_connected}
         if action == "get_login_info":
             return {"user_id": 0, "nickname": f"official-{self.app_id}"}
+        if action == "send_group_msg":
+            # 主动消息：不带 msg_id 直接发（消耗主动配额，内置限速）
+            openid = self._group_openid_by_id.get(int(params.get("group_id") or 0))
+            if not openid:
+                raise ApiError(action, 1404, "官方通道无该群 openid 映射（未收到过该群消息）")
+            await self._rate_gate(action)
+            await self._http_post(
+                f"{self.api_base}/v2/groups/{openid}/messages",
+                {
+                    "msg_type": 0,
+                    "msg_seq": self._next_seq(),
+                    "content": self._message_param_to_text(params.get("message")),
+                },
+            )
+            logger.info("官方群主动消息已发送 (group=%s)", openid[:8] + "…")
+            return {"message_id": 0}
+        if action == "send_private_msg":
+            openid = self._user_openid_by_id.get(int(params.get("user_id") or 0))
+            if not openid:
+                raise ApiError(action, 1404, "官方通道无该用户 openid 映射（未收到过该用户消息）")
+            await self._rate_gate(action)
+            await self._http_post(
+                f"{self.api_base}/v2/users/{openid}/messages",
+                {
+                    "msg_type": 0,
+                    "msg_seq": self._next_seq(),
+                    "content": self._message_param_to_text(params.get("message")),
+                },
+            )
+            logger.info("官方单聊主动消息已发送 (user=%s)", openid[:8] + "…")
+            return {"message_id": 0}
         # 其余 OneBot 风格动作在本通道不支持 → 抛错，由 Bot 路由到其他通道
         raise ApiError(action, 1404, f"官方通道不支持动作 {action!r}（由框架路由其他通道）")
 

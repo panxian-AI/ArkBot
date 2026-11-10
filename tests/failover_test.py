@@ -121,6 +121,25 @@ async def main() -> int:
     ok = post is not None and post["body"].get("content") == "在的"
     check("阶段三：关键词在官方通道同样生效", ok)
 
+    # ========= 阶段五：主动消息在 OneBot 死亡后仍能发出 =========
+    # 官方通道从阶段三的事件里学到了群 openid 映射（伪数字 ID = CRC32）
+    import zlib as _zlib
+    pseudo_group = _zlib.crc32(b"GROUP_OPENID_X") & 0x7FFFFFFF
+    ff.http_posts.clear()
+    await app.bot.send_group_msg(pseudo_group, MessageSegment.text("官方主动消息"))
+    await asyncio.sleep(1.2)
+    post = ff.find_post("/v2/groups/")
+    ok = (
+        post is not None
+        and post["body"].get("content") == "官方主动消息"
+        and not post["body"].get("msg_id")   # 不带 msg_id = 官方主动消息
+    )
+    check("阶段五：OneBot 死亡后主动消息改走官方通道", ok)
+    check("阶段五：主动消息不带 msg_id（官方主动消息语义）",
+          post is not None and not post["body"].get("msg_id"))
+    check("阶段五：插件层零改动（仍用数字 group_id 调用）",
+          post is not None and post["body"].get("content") == "官方主动消息")
+
     # 主动发送（如定时任务）在所有通道挂掉时入离线发件箱，不丢不崩
     ff.http_posts.clear()
     ob.received.clear()

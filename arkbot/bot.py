@@ -132,8 +132,9 @@ class Bot:
             try:
                 return await a.call_api(action, params)
             except ApiError as e:
-                if e.retcode == 1404:
-                    # 该通道不支持此动作 → 尝试下一个通道
+                if e.retcode in (1404, 429):
+                    # 1404=通道不支持此动作；429=通道限速 → 尝试下一个通道，
+                    # 都不行时 send_* 动作落入离线发件箱延迟补发
                     continue
                 raise
             except Exception as e:

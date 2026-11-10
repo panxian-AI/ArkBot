@@ -31,9 +31,39 @@ ArkBot 的答案是**异构多通道 + 无感接管**：
    QQ 不可能封掉自己的官方 API。同一份插件代码继续服务。
 3. **离线发件箱**：极端情况所有通道同时不可用，定时任务消息入队暂存
    （10 分钟 TTL），通道恢复后自动补发——用户「延迟收到」而不是「丢失」。
+4. **主动消息不中断**：官方通道支持不带 `msg_id` 的主动发送（内置
+   30/qpm 限速，超限自动降级到其他通道或发件箱补发）；openid ↔ 数字 ID
+   自动映射，插件层照旧用数字 group_id/user_id 调用，零改动。
 
 **用户体验无感**是硬性验收标准（见 `tests/failover_test.py`）：
 同一条命令在两个通道行为完全一致，通道切换对 QQ 用户不可见。
+
+## ArkBot NG —— 全新微内核（`arkbot2/`）
+
+基于 2026-11 依赖调研（`python -m arkbot2 --capabilities` 可查看候选清单）重写的运行时，
+**plugins/ 目录下原有插件零改动可用**（`tests/arkbot2_compat_test.py` 18/18 验证）。
+
+NG 内核新能力：
+
+| 能力 | 说明 |
+|------|------|
+| 结构化并发 | 非消息事件用 `asyncio.TaskGroup` 并发分发，监听器互不阻塞 |
+| 中间件管道 | 事件先穿 middleware 链再进匹配器，可做限流 / 审计 / 改写 |
+| 依赖注入 | 新式处理器按类型注解拿依赖：`async def h(bot: Bot, ev: MessageEvent, state: dict)` |
+| entry_points 插件 | pip 包声明 `[project.entry-points."arkbot2.plugins"]` 即可被自动发现 |
+| 旧插件兼容 | 影子导入：`from arkbot import Plugin` 自动切换到 NG 内核注册 |
+
+兼容机制（`arkbot2/legacy.py`）：NG 启动时先把真实 `arkbot` 包作为传输层正常导入
+（构建通道），随后把 `sys.modules['arkbot']` 换成影子模块——旧插件 import 到的
+`Plugin` / 规则函数注册进 NG 内核而非旧分发器，而消息链、事件模型、适配器等
+稳定组件原样复用。**内核换了，桥还在。**
+
+```bash
+python -m arkbot2                  # 按 bot.toml 启动（支持 [adapter] 与 [[channels]]）
+python -m arkbot2 --capabilities   # 依赖候选清单
+```
+
+旧式 `(event, state)` 处理器与 NG 式 DI 处理器可在同一插件中混用。
 
 ## 快速开始
 

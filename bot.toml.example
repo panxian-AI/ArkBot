@@ -24,3 +24,19 @@ plugins_dir = "plugins"
 auto_friend = true
 welcome = "欢迎新同学入群！"
 # report_group = 123456789     # 每天 8 点问候的群号（不配则不发）
+
+# ---------------------------------------------------------------------------
+# ArkBot NG（arkbot2 内核）：
+#   - 运行 python -m arkbot2 时读取本文件；
+#   - [[channels]] 为 NG 新式多通道写法（等效上面的 [[adapters]]）；
+#   - 旧插件零改动可用，另支持 entry_points 插件发现。
+# ---------------------------------------------------------------------------
+# [[channels]]
+# type = "onebot11"
+# url = "ws://127.0.0.1:6700"
+# access_token = ""
+#
+# [[channels]]
+# type = "official_qq"
+# app_id = "102345678"
+# app_secret = "your-secret"

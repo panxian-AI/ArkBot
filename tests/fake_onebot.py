@@ -146,6 +146,13 @@ class FakeOneBotServer:
         for ws in list(self._clients):
             await self._push(ws, ev)
 
+    async def push_custom(self, event: dict):
+        """推送任意原始事件（测试用）。"""
+        event.setdefault("time", _ts())
+        event.setdefault("self_id", SELF_ID)
+        for ws in list(self._clients):
+            await self._push(ws, event)
+
     def find_call(self, action: str) -> dict | None:
         """查询框架是否发起过某个 API 调用。"""
         for c in self.received:
