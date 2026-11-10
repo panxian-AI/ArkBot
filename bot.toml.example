@@ -1,0 +1,26 @@
+# ArkBot 配置
+# 抗 ban 策略：[[adapters]] 可配多条通道并行 ——
+#   onebot11   → NapCat / Lagrange / LLOneBot 等逆向实现（全功能）
+#   official_qq → QQ 官方机器人开放平台（不依赖逆向，OneBot 全灭后兜底）
+# 事件统一分发、回复走来源通道、一条被 ban 其余无感接管。
+
+[[adapters]]
+type = "onebot11"
+url = "ws://127.0.0.1:6700"  # NapCat / Lagrange 的正向 WS 地址
+access_token = ""             # 实现侧设置的 token，没有就留空
+reconnect_interval = 3.0      # 断线初始重连间隔（指数退避，上限 60s）
+
+# 官方通道（可选，封禁兜底）——在 QQ 开放平台创建机器人后填 appid/secret
+# [[adapters]]
+# type = "official_qq"
+# app_id = "102345678"
+# app_secret = "your-secret"
+
+[bot]
+log_level = "INFO"
+plugins_dir = "plugins"
+
+[plugins.groupkit]
+auto_friend = true
+welcome = "欢迎新同学入群！"
+# report_group = 123456789     # 每天 8 点问候的群号（不配则不发）
