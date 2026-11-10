@@ -4,3 +4,4 @@ bot.toml
 .venv/
 .env
 .workbuddy/
+debug.log
