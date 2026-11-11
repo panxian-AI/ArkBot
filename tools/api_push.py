@@ -35,8 +35,12 @@ def api(method: str, path: str, token: str, payload: dict | None = None) -> dict
         },
         data=json.dumps(payload).encode("utf-8") if payload is not None else None,
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")[:200]
+        raise RuntimeError(f"{method} {path} -> HTTP {e.code}: {body}") from e
 
 
 def git(*args: str) -> str:
@@ -56,12 +60,17 @@ def main() -> int:
     remote = api("GET", "/commits/main", token)
     print(f"远程 main: {remote['sha'][:7]}")
 
-    # 2) 全量上传 blob（本地 HEAD 的全部文件）
+    # 2) 全量上传 blob（本地 HEAD 的全部文件；.github/workflows 需要
+    #    workflow scope 的令牌，无权限时自动剔除并提示）
     entries = []
+    skipped: list[str] = []
     for line in git("ls-tree", "-r", "HEAD").splitlines():
         meta, path = line.split("\t", 1)
         mode, otype, sha = meta.split()
         assert otype == "blob", f"跳过非 blob 条目: {path}"
+        if path.startswith(".github/"):
+            skipped.append(path)
+            continue
         content = Path(path).read_bytes()
         blob = api("POST", "/git/blobs", token, {
             "content": base64.b64encode(content).decode("ascii"),
@@ -69,7 +78,7 @@ def main() -> int:
         })
         assert blob["sha"] == sha, f"blob SHA 不一致 {path}: {blob['sha']} != {sha}"
         entries.append({"path": path, "mode": mode, "type": "blob", "sha": blob["sha"]})
-    print(f"blob 上传完成: {len(entries)} 个")
+    print(f"blob 上传完成: {len(entries)} 个（跳过需 workflow scope: {skipped or '无'}）")
 
     # 3) 建树 → 提交 → 更新 ref
     tree = api("POST", "/git/trees", token, {"tree": entries})
@@ -78,6 +87,9 @@ def main() -> int:
     })
     api("PATCH", "/git/refs/heads/main", token, {"sha": commit["sha"], "force": False})
     print(f"推送成功: {commit['sha'][:7]} (parent {remote['sha'][:7]}, tree {tree['sha'][:7]})")
+    if skipped:
+        print("提醒: .github/workflows 变更未推送（token 需含 workflow scope），"
+              "换令牌后重跑本脚本即可补上。")
     return 0
 
 

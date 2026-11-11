@@ -71,7 +71,10 @@ async def main() -> int:
     p2.close()
 
     # ---- 内存模式降级 ----
-    p3 = Persist(tmp / "bad?name.db")  # Windows 非法文件名 → 打开必失败
+    # ---- 内存模式降级（跨平台：父路径是已存在的文件，mkdir 必失败） ----
+    blocker = tmp / "blocker.txt"
+    blocker.write_text("x", encoding="utf-8")
+    p3 = Persist(blocker / "sub" / "x.db")  # 父路径是文件 → 建目录必失败
     check("非法路径退化为内存模式", p3._db is None and p3.get("k", "d") == "d")
 
     print(f"\n持久化冒烟: {PASS} 过 / {FAIL} 挂")

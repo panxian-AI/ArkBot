@@ -2,6 +2,8 @@
 
 > 桥被 ban 了就上方舟 —— 抗封禁、可插拔适配器的 QQ 机器人框架。
 
+[![CI](https://github.com/panxian-AI/ArkBot/actions/workflows/ci.yml/badge.svg)](https://github.com/panxian-AI/ArkBot/actions/workflows/ci.yml)
+
 ## 为什么是 ArkBot
 
 QQ 机器人生态的现实：协议实现（OneBot 系：NapCat、Lagrange、LLOneBot、go-cqhttp……）
