@@ -6,3 +6,6 @@ bot.toml
 .workbuddy/
 debug.log
 data/
+*.egg-info/
+build/
+dist/

@@ -63,8 +63,10 @@ NG 内核新能力：
 稳定组件原样复用。**内核换了，桥还在。**
 
 ```bash
-python -m arkbot2                  # 按 bot.toml 启动（支持 [adapter] 与 [[channels]]）
-python -m arkbot2 --capabilities   # 依赖候选清单
+pip install .                      # 源码安装（或 pip install arkbot）
+arkbot2                            # 按 bot.toml 启动（支持 [adapter] 与 [[channels]]）
+arkbot2 --capabilities             # 依赖候选清单
+# 或模块方式：python -m arkbot2
 ```
 
 旧式 `(event, state)` 处理器与 NG 式 DI 处理器可在同一插件中混用。

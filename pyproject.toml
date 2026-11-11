@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arkbot"
+version = "0.2.0"
+description = "Anti-ban QQ bot framework: pluggable adapters (OneBot 11 + official QQ API), dual-channel seamless failover, offline outbox, NG microkernel with legacy plugin compatibility"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "panxian-AI" }]
+keywords = ["qq", "bot", "onebot", "napcat", "framework", "asyncio"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Chat",
+]
+dependencies = [
+  "websockets>=12",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+]
+
+[project.urls]
+Homepage = "https://github.com/panxian-AI/ArkBot"
+Repository = "https://github.com/panxian-AI/ArkBot"
+
+# CLI 入口：pip install arkbot 后直接可用
+[project.scripts]
+arkbot = "arkbot.__main__:main"
+arkbot2 = "arkbot2.__main__:main"
+
+[project.entry-points."arkbot2.plugins"]
+# pip 包插件在此声明，例如：
+# my-plugin = "my_pkg.plugin_module"
+
+[tool.setuptools]
+packages = [
+  "arkbot", "arkbot.adapters",
+  "arkbot2",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
