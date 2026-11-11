@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from .adapters.base import Adapter, ApiError
@@ -20,6 +21,7 @@ from .message import MessageChain, MessageSegment, Msg
 
 if TYPE_CHECKING:
     from .app import ArkBot
+    from .persist import Persist
 
 logger = logging.getLogger("arkbot.bot")
 
@@ -37,19 +39,41 @@ def _to_chain(msg: Msg) -> MessageChain:
 class Bot:
     """统一 API。所有方法返回与 OneBot 风格同构的 data。"""
 
-    def __init__(self, app: "ArkBot", adapters: list[Adapter] | Adapter):
+    def __init__(
+        self,
+        app: "ArkBot",
+        adapters: list[Adapter] | Adapter,
+        persist: "Persist | None" = None,
+    ):
         self.app = app
         self.adapters: list[Adapter] = (
             list(adapters) if isinstance(adapters, list) else [adapters]
         )
         self.self_id: int = 0
+        # 持久化：离线发件箱落盘，进程重启后自动恢复补发（磁盘不可用则内存模式）
+        self.persist = persist
         # 离线发件箱：所有通道都不可用时暂存主动消息，通道恢复后自动补发
         # —— 让定时任务类消息在故障期间「延迟到达」而不是「丢失」，体验无感
+        # 注意：at 用墙上时钟 time.time()，跨进程重启仍然可比（旧版用循环
+        # 相对时间，重启后 TTL 判断会失真，这也是本次持久化修复的一部分）
         self._outbox: list[dict[str, Any]] = []
         self._outbox_task: asyncio.Task | None = None
 
     def start_outbox(self) -> None:
-        """由 App 在事件循环内调用，启动发件箱补发任务。"""
+        """由 App 在事件循环内调用：先从磁盘恢复未补发的消息，再启动补发任务。"""
+        if self.persist is not None:
+            try:
+                saved = self.persist.load_outbox()
+                now = time.time()
+                restored = [i for i in saved if now - i.get("at", 0) <= self.OUTBOX_TTL]
+                dropped = len(saved) - len(restored)
+                if restored:
+                    self._outbox = restored[: self.OUTBOX_MAX]
+                    logger.info("从磁盘恢复 %d 条发件箱消息（过期丢弃 %d 条）", len(restored), dropped)
+                elif dropped:
+                    logger.info("清理 %d 条过期发件箱消息", dropped)
+            except Exception:
+                logger.exception("发件箱恢复失败（忽略，继续内存模式）")
         self._outbox_task = asyncio.get_running_loop().create_task(self._flush_outbox())
 
     async def stop_outbox(self) -> None:
@@ -71,7 +95,7 @@ class Bot:
             if not self._outbox or not self.healthy():
                 continue
             still_pending: list[dict[str, Any]] = []
-            now = asyncio.get_event_loop().time()
+            now = time.time()
             for item in self._outbox:
                 if now - item["at"] > self.OUTBOX_TTL:
                     logger.warning("发件箱消息过期丢弃: %s", item["action"])
@@ -82,6 +106,24 @@ class Bot:
                 except Exception:
                     still_pending.append(item)
             self._outbox = still_pending[: self.OUTBOX_MAX]
+            self._save_outbox()
+
+    # ---------- 发件箱持久化 ----------
+    def _enqueue_outbox(self, action: str, params: dict[str, Any]) -> None:
+        if len(self._outbox) >= self.OUTBOX_MAX:
+            logger.warning("发件箱已满（%d），丢弃 %s", self.OUTBOX_MAX, action)
+            return
+        self._outbox.append({"action": action, "params": params, "at": time.time()})
+        self._save_outbox()
+        logger.warning("无通道可完成 %s，已入离线发件箱（恢复后自动补发）", action)
+
+    def _save_outbox(self) -> None:
+        if self.persist is None:
+            return
+        try:
+            self.persist.save_outbox(list(self._outbox))
+        except Exception:
+            logger.exception("发件箱落盘失败（忽略）")
 
     # ---------- 通道选择 ----------
     @property
@@ -142,14 +184,8 @@ class Bot:
                 logger.warning("通道 %s 调用 %s 失败: %s", a.name, action, e)
         # 所有通道都无法完成该动作（不可达或不支持）：主动消息入发件箱补发
         if action.startswith("send_"):
-            if len(self._outbox) < self.OUTBOX_MAX:
-                self._outbox.append({
-                    "action": action,
-                    "params": params,
-                    "at": asyncio.get_event_loop().time(),
-                })
-                logger.warning("无通道可完成 %s，已入离线发件箱（恢复后自动补发）", action)
-                return None
+            self._enqueue_outbox(action, params)
+            return None
         raise ApiError(action, -1, f"无可用通道（最后错误: {last_err}）")
 
     # ---------- 发消息（主动） ----------

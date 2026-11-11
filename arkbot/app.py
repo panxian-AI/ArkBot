@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from pathlib import Path
 from typing import Any
 
 from .adapters.base import Adapter
@@ -22,6 +23,7 @@ from .bot import Bot
 from .config import Config
 from .dispatch import Dispatcher
 from .event import Event, MessageEvent
+from .persist import Persist
 from .plugin import PluginManager
 from .scheduler import Scheduler
 
@@ -33,6 +35,7 @@ class ArkBot:
         self,
         config: Config | None = None,
         adapter: Adapter | list[Adapter] | None = None,
+        persist: Persist | None = None,
     ):
         self.config = config or Config.load()
         logging.basicConfig(
@@ -46,7 +49,20 @@ class ArkBot:
             self.adapters = adapter
         else:
             self.adapters = [adapter]
-        self.bot = Bot(app=self, adapters=self.adapters)
+        # 持久化：从配置构建（生产模式）时默认开启；外部注入通道（测试）时
+        # 默认关闭，避免测试之间串数据。可显式传 persist 覆盖。
+        if persist is not None:
+            self.persist = persist
+        elif adapter is None:
+            data_dir = self.config.get("bot", {}).get("data_dir", "data")
+            self.persist = Persist(Path(data_dir) / "arkbot.db")
+        else:
+            self.persist = None
+        self.bot = Bot(app=self, adapters=self.adapters, persist=self.persist)
+        # 通道级持久化挂载（官方通道的 openid 映射表）
+        for a in self.adapters:
+            if hasattr(a, "attach_persist"):
+                a.attach_persist(self.persist)
         self.dispatcher = Dispatcher()
         self.scheduler = Scheduler(wait_connected=self._wait_connected)
         self.plugin_manager = PluginManager(self)
@@ -135,4 +151,6 @@ class ArkBot:
         await self.bot.stop_outbox()
         for a in self.adapters:
             await a.stop()
+        if self.persist is not None:
+            self.persist.close()
         logger.info("再见。")

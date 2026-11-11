@@ -94,9 +94,10 @@ class OfficialQQAdapter(Adapter):
         self._connected = asyncio.Event()
         self._seq: int = 0
         self._msg_seq = random.randint(1, 10000)
-        # 数字 ID ↔ openid 映射（从收到的事件自动学习）
+        # 数字 ID ↔ openid 映射（从收到的事件自动学习，可落盘持久化）
         self._group_openid_by_id: dict[int, str] = {}
         self._user_openid_by_id: dict[int, str] = {}
+        self._persist: Any = None
         # 主动消息限速：滑动窗口 60s（默认 30/qpm，未认证档保守值）
         self.active_rate_limit: int = 30
         self._active_times: deque[float] = deque()
@@ -270,16 +271,46 @@ class OfficialQQAdapter(Adapter):
             ev.to_me = to_me
         return ev
 
+    # ---------------- 持久化 ----------------
+
+    def attach_persist(self, persist: Any) -> None:
+        """挂载持久化存储：映射表落盘 + 从磁盘恢复历史映射。
+
+        由 App 在构建通道后调用。恢复映射意味着重启后无需等新事件，
+        立即可向之前见过的群/用户主动发消息。
+        """
+        self._persist = persist
+        if persist is None:
+            return
+        try:
+            restored = 0
+            for k in persist.keys("official.group."):
+                pid = int(k.rsplit(".", 1)[1])
+                self._group_openid_by_id[pid] = persist.get(k)
+                restored += 1
+            for k in persist.keys("official.user."):
+                pid = int(k.rsplit(".", 1)[1])
+                self._user_openid_by_id[pid] = persist.get(k)
+                restored += 1
+            if restored:
+                logger.info("官方通道从磁盘恢复 %d 条 openid 映射", restored)
+        except Exception:
+            logger.exception("openid 映射恢复失败（忽略，等待新事件学习）")
+
     def _learn_group(self, openid: str) -> int:
         pseudo = _pseudo_id(openid)
-        if openid:
-            self._group_openid_by_id.setdefault(pseudo, openid)
+        if openid and pseudo not in self._group_openid_by_id:
+            self._group_openid_by_id[pseudo] = openid
+            if self._persist is not None:
+                self._persist.set(f"official.group.{pseudo}", openid)
         return pseudo
 
     def _learn_user(self, openid: str) -> int:
         pseudo = _pseudo_id(openid)
-        if openid:
-            self._user_openid_by_id.setdefault(pseudo, openid)
+        if openid and pseudo not in self._user_openid_by_id:
+            self._user_openid_by_id[pseudo] = openid
+            if self._persist is not None:
+                self._persist.set(f"official.user.{pseudo}", openid)
         return pseudo
 
     # ---------------- 回复（按官方协议语义） ----------------

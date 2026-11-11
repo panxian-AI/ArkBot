@@ -33,11 +33,21 @@ class ArkBot2:
         config_path: str | Path = "bot.toml",
         channels: list[Any] | None = None,
         plugins_dir: str | Path | None = None,
+        persist: Any = None,
     ):
         self.config = Ark2Config.load(config_path)
         self.kernel = Kernel()
         self.channels: list[Any] = list(channels) if channels else []
-        self.bot = Bot(self, self.channels)
+        # 持久化：从配置构建（生产模式）时默认开启；注入通道（测试）时默认关闭。
+        if persist is not None:
+            self.persist = persist
+        elif not channels:
+            from arkbot.persist import Persist
+
+            self.persist = Persist(Path(self.config.data_dir) / "arkbot.db")
+        else:
+            self.persist = None
+        self.bot = Bot(self, self.channels, persist=self.persist)
         self.scheduler = Scheduler(wait_connected=self._any_connected)
         self.plugin_loader = PluginLoader(self)
         self._plugins_dir = Path(plugins_dir) if plugins_dir else Path(self.config.plugins_dir)
@@ -93,6 +103,10 @@ class ArkBot2:
     async def run(self) -> None:
         self._setup_logging()
         self._build_channels()
+        # 通道级持久化挂载（官方通道的 openid 映射表）
+        for ch in self.channels:
+            if hasattr(ch, "attach_persist"):
+                ch.attach_persist(self.persist)
         from .legacy import enable_legacy_import
         enable_legacy_import()
 
@@ -118,6 +132,8 @@ class ArkBot2:
         await self.bot.stop_outbox()
         for ch in self.channels:
             await ch.stop()
+        if self.persist is not None and hasattr(self.persist, "close"):
+            self.persist.close()
         logger.info("再见。")
 
     async def _any_connected(self) -> bool:

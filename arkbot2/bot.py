@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from .app import ArkBot2
+    from arkbot.persist import Persist
 
 logger = logging.getLogger("arkbot2.bot")
 
@@ -48,10 +50,17 @@ def _to_onebot(msg: Any) -> Any:
 class Bot:
     """统一 API。所有方法返回与 OneBot 风格同构的 data。"""
 
-    def __init__(self, app: "ArkBot2", channels: list[Any]):
+    def __init__(
+        self,
+        app: "ArkBot2",
+        channels: list[Any],
+        persist: "Persist | None" = None,
+    ):
         self.app = app
         self.channels: list[Any] = channels
         self.self_id: int = 0
+        # 持久化：离线发件箱落盘，进程重启后自动恢复补发（与旧内核同一套语义）
+        self.persist = persist
         self._outbox: list[dict[str, Any]] = []
         self._outbox_task: asyncio.Task | None = None
 
@@ -61,6 +70,19 @@ class Bot:
 
     # ---------- 发件箱 ----------
     def start_outbox(self) -> None:
+        if self.persist is not None:
+            try:
+                saved = self.persist.load_outbox()
+                now = time.time()
+                restored = [i for i in saved if now - i.get("at", 0) <= self.OUTBOX_TTL]
+                dropped = len(saved) - len(restored)
+                if restored:
+                    self._outbox = restored[: self.OUTBOX_MAX]
+                    logger.info("从磁盘恢复 %d 条发件箱消息（过期丢弃 %d 条）", len(restored), dropped)
+                elif dropped:
+                    logger.info("清理 %d 条过期发件箱消息", dropped)
+            except Exception:
+                logger.exception("发件箱恢复失败（忽略，继续内存模式）")
         self._outbox_task = asyncio.get_running_loop().create_task(self._flush_outbox())
 
     async def stop_outbox(self) -> None:
@@ -78,7 +100,7 @@ class Bot:
             if not self._outbox or not self.healthy():
                 continue
             still_pending: list[dict[str, Any]] = []
-            now = asyncio.get_event_loop().time()
+            now = time.time()
             for item in self._outbox:
                 if now - item["at"] > self.OUTBOX_TTL:
                     logger.warning("发件箱消息过期丢弃: %s", item["action"])
@@ -89,6 +111,24 @@ class Bot:
                 except Exception:
                     still_pending.append(item)
             self._outbox = still_pending[: self.OUTBOX_MAX]
+            self._save_outbox()
+
+    # ---------- 发件箱持久化 ----------
+    def _enqueue_outbox(self, action: str, params: dict[str, Any]) -> None:
+        if len(self._outbox) >= self.OUTBOX_MAX:
+            logger.warning("发件箱已满（%d），丢弃 %s", self.OUTBOX_MAX, action)
+            return
+        self._outbox.append({"action": action, "params": params, "at": time.time()})
+        self._save_outbox()
+        logger.warning("无通道可完成 %s，已入离线发件箱（恢复后自动补发）", action)
+
+    def _save_outbox(self) -> None:
+        if self.persist is None:
+            return
+        try:
+            self.persist.save_outbox(list(self._outbox))
+        except Exception:
+            logger.exception("发件箱落盘失败（忽略）")
 
     # ---------- 通道选择 ----------
     @property
@@ -141,12 +181,8 @@ class Bot:
                     continue
                 last_err = e
                 logger.warning("通道 %s 调用 %s 失败: %s", c.name, action, e)
-        if action.startswith("send_") and len(self._outbox) < self.OUTBOX_MAX:
-            self._outbox.append({
-                "action": action, "params": params,
-                "at": asyncio.get_event_loop().time(),
-            })
-            logger.warning("无通道可完成 %s，已入离线发件箱（恢复后自动补发）", action)
+        if action.startswith("send_"):
+            self._enqueue_outbox(action, params)
             return None
         raise RuntimeError(f"无可用通道完成 {action}（最后错误: {last_err}）")
 

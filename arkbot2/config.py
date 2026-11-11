@@ -44,6 +44,7 @@ class Ark2Config:
     channels: list[ChannelCfg] = field(default_factory=list)
     plugins_dir: str = "plugins"
     log_level: str = "INFO"
+    data_dir: str = "data"
     plugins: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
@@ -68,5 +69,6 @@ class Ark2Config:
             channels=channels,
             plugins_dir=str(bot_cfg.get("plugins_dir", "plugins")),
             log_level=str(bot_cfg.get("log_level", "INFO")),
+            data_dir=str(bot_cfg.get("data_dir", "data")),
             plugins={str(k): dict(v) if isinstance(v, dict) else {} for k, v in plugins_raw.items()},
         )
