@@ -19,11 +19,48 @@ reconnect_interval = 3.0      # 断线初始重连间隔（指数退避，上限
 [bot]
 log_level = "INFO"
 plugins_dir = "plugins"
+data_dir = "data"              # SQLite（发件箱/openid 映射）落盘目录，自动创建
 
 [plugins.groupkit]
 auto_friend = true
 welcome = "欢迎新同学入群！"
 # report_group = 123456789     # 每天 8 点问候的群号（不配则不发）
+
+# ---------------------------------------------------------------------------
+# AI 聊天（plugins/ai_chat.py）——把 AstrBot / DSH 养鱼 / 任意模型接进 QQ
+# 详见 docs/AI聊天接入.md
+# ---------------------------------------------------------------------------
+[plugins.ai_chat]
+default_backend = "astr"       # 默认用哪个后端（下方 backends 里的键名）
+wake_words = ["大鱼", "肥鱼"]   # 群里出现这些词就自动接话
+relay = true                   # 群聊「养鱼模式」默认开启（被 @ 也会接话）
+cooldown = 5.0                 # 同一会话自动接话最小间隔（秒），/ai 命令不受限
+max_chars = 600                # 单条回复最大字数，超出分段发送
+
+# AstrBot：WebUI → 设置 → API Key 建一个带 chat scope 的 key
+[plugins.ai_chat.backends.astr]
+type = "astrbot"
+base_url = "http://127.0.0.1:6185"
+api_key = ""                   # abk_xxx
+username = "arkbot"            # AstrBot 侧区分会话归属用
+stream = true                  # v4.18+ 的 SSE 流式接口
+
+# DSH 养鱼：mode 可选 aurbot / bridge / openai
+# [plugins.ai_chat.backends.fish]
+# type = "dsh"
+# mode = "aurbot"              # aurbot=插件本地接口；bridge=入站队列+outbox；openai=标准协议
+# base_url = "http://127.0.0.1:8770"
+# path = "/api/chat"
+# token = ""
+
+# 最稳的兜底：任意 OpenAI 兼容端点（DeepSeek / Ollama / LM Studio / 网关）
+# [plugins.ai_chat.backends.model]
+# type = "openai"
+# base_url = "https://api.deepseek.com/v1"
+# api_key = "sk-..."
+# model = "deepseek-chat"
+# persona = "你是一条住在 QQ 群里的大肥鱼，说话简短、爱用颜文字。"
+
 
 # ---------------------------------------------------------------------------
 # ArkBot NG（arkbot2 内核）：

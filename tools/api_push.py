@@ -21,7 +21,8 @@ import urllib.request
 from pathlib import Path
 
 REPO = "panxian-AI/ArkBot"
-API = f"https://api.github.com/repos/{REPO}"
+ROOT = "https://api.github.com"
+API = f"{ROOT}/repos/{REPO}"
 
 
 def api(method: str, path: str, token: str, payload: dict | None = None) -> dict:
@@ -43,8 +44,18 @@ def api(method: str, path: str, token: str, payload: dict | None = None) -> dict
         raise RuntimeError(f"{method} {path} -> HTTP {e.code}: {body}") from e
 
 
-def git(*args: str) -> str:
-    return subprocess.run(
+def api_headers(method: str, path: str, token: str) -> dict:
+    """只取响应头（用于读取令牌 scope）。"""
+    req = urllib.request.Request(
+        f"{ROOT}{path}",
+        method=method,
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "arkbot-api-push"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return dict(resp.headers)
+
+
+def git(*args: str) -> str:    return subprocess.run(
         ["git", *args], capture_output=True, text=True, encoding="utf-8", check=True
     ).stdout.strip()
 
@@ -56,22 +67,26 @@ def main() -> int:
         return 2
     message = sys.argv[2] if len(sys.argv) > 2 else git("log", "-1", "--format=%B")
 
-    # 1) 远程当前 main
+    # 1) 远程当前 main + 令牌权限（.github/workflows 需要 workflow scope）
     remote = api("GET", "/commits/main", token)
     print(f"远程 main: {remote['sha'][:7]}")
+    scopes = api_headers("GET", "/user", token).get("X-OAuth-Scopes", "") or ""
+    has_workflow = "workflow" in scopes or "*" in scopes or "admin" in scopes
+    print(f"令牌 scope: {scopes or '(fine-grained/未知)'} → workflow 权限: {has_workflow}")
 
-    # 2) 全量上传 blob（本地 HEAD 的全部文件；.github/workflows 需要
-    #    workflow scope 的令牌，无权限时自动剔除并提示）
+    # 2) 全量上传 blob（本地 HEAD 的全部文件；无 workflow scope 时跳过 .github）
     entries = []
     skipped: list[str] = []
     for line in git("ls-tree", "-r", "HEAD").splitlines():
         meta, path = line.split("\t", 1)
         mode, otype, sha = meta.split()
         assert otype == "blob", f"跳过非 blob 条目: {path}"
-        if path.startswith(".github/"):
+        if path.startswith(".github/") and not has_workflow:
             skipped.append(path)
             continue
-        content = Path(path).read_bytes()
+        content = subprocess.run(
+            ["git", "cat-file", "blob", sha], capture_output=True, check=True
+        ).stdout  # 直接从 git 对象取内容，避免工作区改动导致 SHA 不一致
         blob = api("POST", "/git/blobs", token, {
             "content": base64.b64encode(content).decode("ascii"),
             "encoding": "base64",

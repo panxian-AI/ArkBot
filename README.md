@@ -84,6 +84,41 @@ python -m arkbot              # 读取 bot.toml 并运行
 2. 配置 `bot.toml` 的 `[adapter]` 段；
 3. 把插件丢进 `plugins/` 目录。
 
+## 上层：接上 AstrBot 与 DSH「养鱼」
+
+底层解决「怎么连上 QQ」，上层解决「跟谁聊」。`plugins/ai_chat.py` + `arkbot/integrations/chat.py`
+把外部 Agent 接成一个可切换的聊天后端——**同一份代码，`/ai backend fish` 就换一个灵魂**。
+
+```toml
+[plugins.ai_chat]
+default_backend = "astr"
+wake_words = ["大鱼", "肥鱼"]     # 群里提到就自动接话（养鱼模式）
+
+# AstrBot：走它内建的 Agent（插件、工具调用、知识库、人格全部生效）
+[plugins.ai_chat.backends.astr]
+type = "astrbot"
+base_url = "http://127.0.0.1:6185"
+api_key = "abk_xxx"               # WebUI → 设置 → API Key（需 chat scope）
+
+# DSH 养鱼：mode = aurbot / bridge / openai 三选一
+[plugins.ai_chat.backends.fish]
+type = "dsh"
+mode = "aurbot"
+base_url = "http://127.0.0.1:8770"
+```
+
+QQ 里直接用：
+
+| 命令 | 作用 |
+|------|------|
+| `/ai 你好` | 和当前后端聊一句 |
+| `/ai backend fish` | 当前会话切到 DSH（别名 `dsh`/`大鱼`/`养鱼`） |
+| `/ai on` / `/ai off` | 开关本群养鱼模式（被 @ 或唤醒词自动接话） |
+| `/ai reset` | 开新会话 |
+| `/ai who` | 看会话号 / 后端 / 冷却状态 |
+
+细节（三种 DSH 模式怎么选、会话语义、排障）见 **[docs/AI聊天接入.md](docs/AI聊天接入.md)**。
+
 ## 写一个插件
 
 ```python
@@ -122,13 +157,27 @@ class Echo(Plugin):
 ## 端到端验证
 
 ```bash
-python tests/e2e_test.py        # 单通道（OneBot）全链路
-python tests/failover_test.py   # 双通道抗 ban：OneBot 被 ban → 官方通道无感接管
+pytest tests/unit -q              # 88 项单测（消息/规则/调度/持久化/聊天集成）
+python tests/e2e_test.py          # 单通道（OneBot）全链路
+python tests/failover_test.py     # 双通道抗 ban：OneBot 被 ban → 官方通道无感接管
+python tests/arkbot2_compat_test.py  # 旧插件零改动跑在新内核
+python tests/persist_test.py      # 持久化：重启后发件箱与 openid 映射恢复
+python tests/ai_chat_test.py      # AstrBot / DSH 聊天链路（含 SSE 拼接、养鱼模式、冷却、分段）
 ```
+
+全部测试使用假服务端（`tests/fake_*.py`），**不需要真实 QQ 号、不需要连外网**。
 
 failover 测试模拟真实事故链：OneBot 实现在线服务 → 瞬间死亡 →
 用户从官方通道发同一命令 → 回复正常送达 → OneBot 恢复后自动重连、
 发件箱消息自动补发。
+
+## 文档
+
+| 文档 | 内容 |
+|------|------|
+| [docs/AI聊天接入.md](docs/AI聊天接入.md) | AstrBot / DSH 养鱼接入、命令、配置全表、自己加后端、排障 |
+| [docs/共创指南.md](docs/共创指南.md) | 分层契约、代码地图、插件/适配器写法、测试与 PR 清单、good first issue |
+| [bot.toml.example](bot.toml.example) | 所有配置项的注释示例 |
 
 ## 目录结构
 
@@ -142,12 +191,17 @@ arkbot/
 ├── dispatch.py       # 规则引擎与事件分发
 ├── plugin.py         # 插件基类与管理器
 ├── scheduler.py      # every/cron 调度
+├── persist.py        # SQLite KV：发件箱 / openid 映射落盘
+├── integrations/
+│   └── chat.py       # ★ 上层聊天集成（AstrBot / DSH / OpenAI 兼容）
 └── adapters/
     ├── base.py       # ★ 适配器抽象接口 + 回复路由契约
     ├── onebot11.py   # OneBot 11 正向 WS 适配器
     └── official_qq.py# QQ 官方开放平台适配器（封禁兜底）
-plugins/              # 你的插件
-tests/                # 假服务端 + 单通道/双通道端到端测试
+arkbot2/              # NG 微内核（旧插件零改动兼容）
+plugins/              # 插件（echo / groupkit / status / ai_chat）
+docs/                 # 接入文档与共创指南
+tests/                # 假服务端 + 端到端 + 单测
 ```
 
 ## 写一个新适配器（例如未来的 native-qq）

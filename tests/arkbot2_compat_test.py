@@ -89,8 +89,8 @@ async def main() -> int:
     runner = asyncio.create_task(app.run())
     await asyncio.sleep(1.8)  # 等连接 + lifecycle + 插件加载
 
-    check("原有插件全部加载（echo/groupkit/status）",
-          set(app.plugin_loader.plugins) == {"echo", "groupkit", "status"},
+    check("原有插件全部加载（echo/groupkit/status/ai_chat）",
+          {"echo", "groupkit", "status", "ai_chat"} <= set(app.plugin_loader.plugins),
           str(list(app.plugin_loader.plugins)))
     check("lifecycle connect → get_login_info 被调用", calls(server, "get_login_info") != [])
     check("bot.self_id 已从元事件获取", app.bot.self_id == SELF_ID, str(app.bot.self_id))
