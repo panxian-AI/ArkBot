@@ -177,7 +177,7 @@ type = "mybot"
 5. **别引新依赖**：HTTP 用 `post_json` / `get_json` / `post_sse`（标准库 + 线程），项目只依赖 `websockets`。
 
 再加个单测（`tests/unit/test_chat_integrations.py` 里已有模板：构造 + 请求体 + 别名路由），
-和一条 e2e（照着 `tests/fake_chat_backends.py` 写个假服务端）。
+和一条 e2e（照着 `tests/fakes/fake_chat_backends.py` 写个假服务端）。
 
 ---
 
@@ -193,7 +193,7 @@ type = "mybot"
 | 一直重复同一段 | 后端按 `session_id` 缓存了上下文 | `/ai reset` 换会话 |
 | 日志里 `ai_chat 未配置任何聊天后端` | `[plugins.ai_chat.backends.*]` 没写或名字拼错 | 对照第 4 节检查 |
 
-调试建议：把 `[bot] log_level` 设成 `DEBUG`，能看到每天请求的失败原因；假服务端（`tests/fake_chat_backends.py`）
+调试建议：把 `[bot] log_level` 设成 `DEBUG`，能看到每天请求的失败原因；假服务端（`tests/fakes/fake_chat_backends.py`）
 可以在没有 AstrBot / DSH 的机器上验证整条链路。
 
 ---
@@ -201,6 +201,6 @@ type = "mybot"
 ## 7. 和「抗封禁」的关系
 
 - **上层**（本文）：AstrBot 挂了还有 DSH，DSH 挂了还有裸模型，`/ai backend` 一句话切换；
-- **下层**（[README](../README.md)）：OneBot 挂了还有官方通道，官方通道受限还有离线发件箱。
+- **下层**（[README](../../README.md)）：OneBot 挂了还有官方通道，官方通道受限还有离线发件箱。
 
 两层互相独立，所以最坏情况下你仍然能：**在 QQ 里发一句话，得到一个回答**。

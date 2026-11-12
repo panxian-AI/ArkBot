@@ -16,10 +16,12 @@ import logging
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_HERE = Path(__file__).resolve().parent
+ROOT = _HERE.parents[1]
+sys.path[:0] = [str(_HERE), str(_HERE.parent), str(ROOT)]
 
-from fake_official_qq import TOKEN as OFFICIAL_TOKEN, FakeOfficialQQServer
-from fake_onebot import ACCESS_TOKEN, FakeOneBotServer
+from fakes.fake_official_qq import TOKEN as OFFICIAL_TOKEN, FakeOfficialQQServer
+from fakes.fake_onebot import ACCESS_TOKEN, FakeOneBotServer
 
 from arkbot import MessageSegment, Plugin
 from arkbot.app import ArkBot

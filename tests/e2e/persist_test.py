@@ -5,8 +5,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_HERE = Path(__file__).resolve().parent
+ROOT = _HERE.parents[1]
+sys.path[:0] = [str(_HERE), str(_HERE.parent), str(ROOT)]
 
 PASS = 0
 FAIL = 0

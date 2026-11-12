@@ -18,14 +18,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "plugins"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_HERE = Path(__file__).resolve().parent
+ROOT = _HERE.parents[1]
+sys.path[:0] = [str(_HERE), str(_HERE.parent), str(ROOT), str(ROOT / "plugins")]
 
 from ai_chat import AiChat  # noqa: E402  （plugins/ 下的插件模块）
-from fake_chat_backends import FakeAstrBot, FakeDsh
-from fake_onebot import ACCESS_TOKEN, FakeOneBotServer
+from fakes.fake_chat_backends import FakeAstrBot, FakeDsh
+from fakes.fake_onebot import ACCESS_TOKEN, FakeOneBotServer
 
 from arkbot.app import ArkBot
 from arkbot.config import Config

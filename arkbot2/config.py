@@ -46,6 +46,7 @@ class Ark2Config:
     log_level: str = "INFO"
     data_dir: str = "data"
     plugins: dict[str, dict[str, Any]] = field(default_factory=dict)
+    compat: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: str | Path = "bot.toml") -> "Ark2Config":
@@ -71,4 +72,5 @@ class Ark2Config:
             log_level=str(bot_cfg.get("log_level", "INFO")),
             data_dir=str(bot_cfg.get("data_dir", "data")),
             plugins={str(k): dict(v) if isinstance(v, dict) else {} for k, v in plugins_raw.items()},
+            compat=dict(data.get("compat") or {}),
         )

@@ -36,6 +36,7 @@ class ArkBot:
         config: Config | None = None,
         adapter: Adapter | list[Adapter] | None = None,
         persist: Persist | None = None,
+        compat: Any | None = None,
     ):
         self.config = config or Config.load()
         logging.basicConfig(
@@ -59,6 +60,10 @@ class ArkBot:
         else:
             self.persist = None
         self.bot = Bot(app=self, adapters=self.adapters, persist=self.persist)
+        # 兼容层：把 ArkBot 自己变成 OneBot 实现，让已存在的 OneBot 上层软件
+        # （NoneBot2 / Koishi / AstrBot / 老脚本）一行不改接入。
+        # 注入优先（测试用），否则按 [compat] 段构建。
+        self.compat = compat if compat is not None else self.config.build_compat(self)
         # 通道级持久化挂载（官方通道的 openid 映射表）
         for a in self.adapters:
             if hasattr(a, "attach_persist"):
@@ -82,6 +87,12 @@ class ArkBot:
         if not self.bot.self_id and event.self_id:
             self.bot.self_id = event.self_id
         await self.dispatcher.dispatch(event)
+        # 分发完再往兼容层推：OneBot 上层软件与 ArkBot 插件看到的是同一份事件
+        if self.compat is not None:
+            try:
+                await self.compat.push_event(event)
+            except Exception:
+                logger.exception("兼容层事件推送失败（不影响主流程）")
 
     async def _wait_connected(self) -> bool:
         """任一通道健康即可。"""
@@ -119,6 +130,13 @@ class ArkBot:
             loaded = self.plugin_manager.load_directory(pdir)
             logger.info("目录插件加载完成: %s", loaded or "无")
 
+        # OneBot 兼容层：对外扮演 OneBot 实现，让现成的 OneBot 上层软件接入
+        if self.compat is not None:
+            try:
+                await self.compat.start()
+            except Exception:
+                logger.exception("兼容层启动失败（QQ 通道继续工作）")
+
         tasks = [
             asyncio.create_task(a.run_forever(), name=f"ark-adapter-{a.name}")
             for a in self.adapters
@@ -149,6 +167,8 @@ class ArkBot:
         await self.plugin_manager.unload_all()
         await self.scheduler.stop()
         await self.bot.stop_outbox()
+        if self.compat is not None:
+            await self.compat.stop()
         for a in self.adapters:
             await a.stop()
         if self.persist is not None:

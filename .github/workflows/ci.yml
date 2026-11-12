@@ -24,19 +24,22 @@ jobs:
         run: pip install -e .[dev]
 
       - name: E2E — single channel
-        run: python tests/e2e_test.py
+        run: python tests/e2e/e2e_test.py
 
       - name: E2E — dual-channel failover (anti-ban)
-        run: python tests/failover_test.py
+        run: python tests/e2e/failover_test.py
+
+      - name: E2E — OneBot upper-layer compatibility
+        run: python tests/e2e/compat_test.py
 
       - name: E2E — NG kernel legacy-plugin compatibility
-        run: python tests/arkbot2_compat_test.py
+        run: python tests/e2e/arkbot2_compat_test.py
 
       - name: Persistence smoke
-        run: python tests/persist_test.py
+        run: python tests/e2e/persist_test.py
 
       - name: E2E — chat integrations (AstrBot / DSH)
-        run: python tests/ai_chat_test.py
+        run: python tests/e2e/ai_chat_test.py
 
       - name: Unit tests
         run: pytest tests/unit -q

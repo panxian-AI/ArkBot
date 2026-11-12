@@ -21,6 +21,27 @@ log_level = "INFO"
 plugins_dir = "plugins"
 data_dir = "data"              # SQLite（发件箱/openid 映射）落盘目录，自动创建
 
+# ---------------------------------------------------------------------------
+# OneBot 11 兼容层 —— 让「以 OneBot 为底层」的软件直接接进来
+#   开启后 ArkBot 自己扮演一个 OneBot 实现（与上面的适配器方向相反）：
+#     正向 WS   ws://host:port/        NoneBot2 正向、Koishi、自研脚本
+#     反向 WS   reverse_urls            AstrBot(aiocqhttp)、NoneBot2 反向
+#     HTTP API  POST /send_msg 等        curl / SDK / 面板
+#     HTTP 上报 http_report_urls         Serverless、PHP 后台
+#   上层一行不改；QQ 侧换通道、走官方兜底、进离线发件箱，它们都感知不到。
+#   详见 docs/OneBot兼容层.md
+# ---------------------------------------------------------------------------
+[compat]
+enabled = false
+host = "127.0.0.1"             # 给别的机器/容器连就写 0.0.0.0（记得设 token）
+port = 6800
+access_token = ""              # 建议设置，OneBot 生态通用鉴权
+heartbeat_interval = 30        # 心跳间隔（秒），0 = 关闭
+# reverse_urls = ["ws://127.0.0.1:6199/ws"]                   # 反向 WS 目标
+# http_report_urls = ["http://127.0.0.1:8080/onebot/event"]   # 事件 HTTP 上报
+# self_id = 10000              # 不填则用下游通道上报的登录号
+# nickname = "ArkBot"
+
 [plugins.groupkit]
 auto_friend = true
 welcome = "欢迎新同学入群！"

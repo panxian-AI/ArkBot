@@ -14,14 +14,14 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(ROOT))
+_HERE = Path(__file__).resolve().parent
+ROOT = _HERE.parents[1]
+sys.path[:0] = [str(_HERE), str(_HERE.parent), str(ROOT)]
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 for n in ("websockets", "asyncio"):
     logging.getLogger(n).setLevel(logging.WARNING)
 
-from fake_onebot import FakeOneBotServer, SELF_ID
+from fakes.fake_onebot import FakeOneBotServer, SELF_ID
 
 # 注意导入顺序：先拿到真实 arkbot 适配器（NG 启动时会切换 'arkbot' 为影子模块）
 from arkbot.adapters.onebot11 import OneBot11Adapter
@@ -31,7 +31,7 @@ from arkbot.event import MessageEvent
 from arkbot2 import ArkBot2, Matcher
 from arkbot2.bot import Bot
 
-PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugins"
+PLUGIN_DIR = ROOT / "plugins"
 
 PASS = 0
 FAIL = 0

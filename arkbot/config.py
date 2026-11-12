@@ -27,6 +27,23 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "log_level": "INFO",
         "plugins_dir": "plugins",
     },
+    # OneBot 11 兼容层（服务端侧）：让「以 OneBot 为底层」的软件直接接进来。
+    # enabled=true 后，ArkBot 自己扮演一个 OneBot 实现：
+    #   ws://host:port/    正向 WS（NoneBot2 / Koishi / 自研脚本）
+    #   http://host:port/  HTTP API（send_msg 等）
+    #   reverse_urls       反向 WS（AstrBot / NoneBot2 反向模式）
+    # 上层软件一行不改，QQ 侧换通道它们完全无感。
+    "compat": {
+        "enabled": False,
+        "host": "127.0.0.1",
+        "port": 6800,
+        "access_token": "",
+        "reverse_urls": [],
+        "http_report_urls": [],
+        "heartbeat_interval": 30.0,
+        "self_id": 0,
+        "nickname": "ArkBot",
+    },
     "plugins": {},   # 每个插件的独立配置段：[plugins.<name>]
 }
 
@@ -53,6 +70,13 @@ class Config:
         env_level = os.getenv("ARKBOT_LOG_LEVEL")
         if env_level:
             data.setdefault("bot", {})["log_level"] = env_level
+        # 兼容层也支持环境变量（容器里改端口/token 不必改文件）
+        env_compat_port = os.getenv("ARKBOT_COMPAT_PORT")
+        if env_compat_port:
+            data.setdefault("compat", {})["port"] = int(env_compat_port)
+        env_compat_token = os.getenv("ARKBOT_COMPAT_TOKEN")
+        if env_compat_token:
+            data.setdefault("compat", {})["access_token"] = env_compat_token
         # 深度合并默认值
         merged = _deep_merge(DEFAULT_CONFIG, data)
         merged = _deep_merge(merged, overrides)
@@ -72,6 +96,30 @@ class Config:
     @property
     def plugins(self) -> dict[str, Any]:
         return self._data.get("plugins", {})
+
+    @property
+    def compat(self) -> dict[str, Any]:
+        return self._data.get("compat", {})
+
+    # ---------- 构造 OneBot 兼容层 ----------
+    def build_compat(self, app: Any) -> Any:
+        """按 [compat] 段构造兼容层；未启用返回 None。"""
+        cfg = self.compat or {}
+        if not cfg.get("enabled"):
+            return None
+        from .compat import OneBot11Server
+
+        return OneBot11Server(
+            app,
+            host=str(cfg.get("host", "127.0.0.1")),
+            port=int(cfg.get("port", 6800)),
+            access_token=cfg.get("access_token") or None,
+            reverse_urls=cfg.get("reverse_urls") or (),
+            http_report_urls=cfg.get("http_report_urls") or (),
+            heartbeat_interval=float(cfg.get("heartbeat_interval", 30) or 0),
+            self_id=int(cfg.get("self_id", 0) or 0),
+            nickname=str(cfg.get("nickname", "ArkBot")),
+        )
 
     # ---------- 构造适配器 ----------
     def build_adapter(self) -> Adapter:

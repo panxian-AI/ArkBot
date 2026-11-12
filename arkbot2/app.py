@@ -48,6 +48,10 @@ class ArkBot2:
         else:
             self.persist = None
         self.bot = Bot(self, self.channels, persist=self.persist)
+        # OneBot 兼容层（可选）：NG 内核同样能对外扮演 OneBot 实现，
+        # 让现成的 OneBot 上层软件直接接入。必须在 enable_legacy_import 之前
+        # 构建 —— 那之后 sys.modules['arkbot'] 会指向影子模块。
+        self.compat = self._build_compat()
         self.scheduler = Scheduler(wait_connected=self._any_connected)
         self.plugin_loader = PluginLoader(self)
         self._plugins_dir = Path(plugins_dir) if plugins_dir else Path(self.config.plugins_dir)
@@ -98,6 +102,30 @@ class ArkBot2:
             await self.kernel.dispatch(event)
         except Exception:
             logger.exception("事件分发异常")
+        if self.compat is not None:
+            try:
+                await self.compat.push_event(event)
+            except Exception:
+                logger.exception("兼容层事件推送失败（忽略）")
+
+    # ---------- 兼容层 ----------
+    def _build_compat(self) -> Any:
+        cfg = self.config.compat or {}
+        if not cfg.get("enabled"):
+            return None
+        from arkbot.compat import OneBot11Server
+
+        return OneBot11Server(
+            self,
+            host=str(cfg.get("host", "127.0.0.1")),
+            port=int(cfg.get("port", 6800)),
+            access_token=cfg.get("access_token") or None,
+            reverse_urls=cfg.get("reverse_urls") or (),
+            http_report_urls=cfg.get("http_report_urls") or (),
+            heartbeat_interval=float(cfg.get("heartbeat_interval", 30) or 0),
+            self_id=int(cfg.get("self_id", 0) or 0),
+            nickname=str(cfg.get("nickname", "ArkBot")),
+        )
 
     # ---------- 生命周期 ----------
     async def run(self) -> None:
@@ -115,6 +143,11 @@ class ArkBot2:
         logger.info("插件加载完成: %s", loaded or "（无）")
 
         self.bot.start_outbox()
+        if self.compat is not None:
+            try:
+                await self.compat.start()
+            except Exception:
+                logger.exception("兼容层启动失败（QQ 通道继续工作）")
         logger.info("ArkBot NG 启动：%d 条通道", len(self.channels))
         async with asyncio.TaskGroup() as tg:
             for ch in self.channels:
@@ -130,6 +163,8 @@ class ArkBot2:
         await self._stopping.wait()
         logger.info("正在停止……")
         await self.bot.stop_outbox()
+        if self.compat is not None:
+            await self.compat.stop()
         for ch in self.channels:
             await ch.stop()
         if self.persist is not None and hasattr(self.persist, "close"):
