@@ -238,8 +238,10 @@ access_token = "xxx"
 ```
 
 ArkLink 已实现：**Milky 1.3**（NapCat / Lagrange / Acidify）、
-**Satori v1**（Koishi / Chronocat）、以及 **QQ NT 原生协议的逆向工具箱**
-（TEA / SSO 封包 / protobuf / qsign，研究态）。
+**Satori v1**（Koishi / Chronocat）、**QQ NT 原生协议的逆向工具箱**
+（TEA / SSO 封包 / protobuf / qsign，研究态），以及 **`ntqq-client`**——
+不注入、不模拟登录，直接操作「已登录的官方客户端」发通知（只发文本），
+在所有协议端都被封、但用户的 QQ 还挂着时，这是最后一条腿。
 
 加载规则在 `arkbot/adapters/loader.py`：内置类型 → entry point group
 `arkbot.adapters` → `"pkg.mod:Class"`，都不匹配时给出可用列表与写法提示。
