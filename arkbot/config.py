@@ -12,12 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from .adapters.base import Adapter
-from .adapters.onebot11 import OneBot11Adapter
-from .adapters.official_qq import OfficialQQAdapter
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "adapter": {
-        # "onebot11" | 将来可扩展 "native-qq" 等
+        # "onebot11" | "official_qq" | 第三方：entry point 名或 "pkg.mod:Class"
         "type": "onebot11",
         "url": "ws://127.0.0.1:6700",
         "access_token": "",
@@ -145,24 +143,14 @@ class Config:
 
 
 def _build_one(entry: dict[str, Any]) -> Adapter:
-    atype = entry.get("type", "onebot11")
-    if atype == "onebot11":
-        return OneBot11Adapter(
-            url=entry.get("url", "ws://127.0.0.1:6700"),
-            access_token=entry.get("access_token") or None,
-            reconnect_interval=float(entry.get("reconnect_interval", 3.0)),
-        )
-    if atype == "official_qq":
-        return OfficialQQAdapter(
-            app_id=str(entry.get("app_id", "")),
-            app_secret=str(entry.get("app_secret", "")),
-            gateway_url=str(entry.get("gateway_url", "wss://api.sgroup.qq.com/websocket")),
-            api_base=str(entry.get("api_base", "https://api.sgroup.qq.com")),
-            access_token=str(entry.get("access_token", "")),
-        )
-    raise ValueError(
-        f"未知适配器类型 {atype!r}。当前支持: onebot11, official_qq。"
-    )
+    """构造单条通道。
+
+    实际分派在 `adapters/loader.py`：内置类型 + entry point + 点分路径，
+    所以第三方包（如 ArkLink 的 Milky / Satori / 原生 QQ）可以零改内核接入。
+    """
+    from .adapters.loader import load_adapter
+
+    return load_adapter(entry)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

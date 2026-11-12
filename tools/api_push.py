@@ -77,8 +77,15 @@ def main() -> int:
     # 2) 全量上传 blob（本地 HEAD 的全部文件；无 workflow scope 时跳过 .github）
     entries = []
     skipped: list[str] = []
-    for line in git("ls-tree", "-r", "HEAD").splitlines():
-        meta, path = line.split("\t", 1)
+    # 用 -z 取路径：git 默认会给中文路径加引号并转义（core.quotePath），
+    # 直接 split 会把 "docs/中文.md" 传成带引号的字面量。
+    raw = subprocess.run(["git", "ls-tree", "-r", "-z", "HEAD"], capture_output=True, check=True).stdout
+    for item in raw.split(b"\x00"):
+        if not item:
+            continue
+        meta_b, _, path_b = item.partition(b"\t")
+        meta = meta_b.decode("ascii")
+        path = path_b.decode("utf-8")
         mode, otype, sha = meta.split()
         assert otype == "blob", f"跳过非 blob 条目: {path}"
         if path.startswith(".github/") and not has_workflow:

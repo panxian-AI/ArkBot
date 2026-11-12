@@ -14,7 +14,7 @@ from .message import MessageChain, MessageSegment
 from .plugin import Plugin
 from .scheduler import Scheduler
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "ArkBot", "Bot", "Config", "Adapter", "ApiError",
     "Event", "MessageEvent", "NoticeEvent", "RequestEvent", "MetaEvent", "Sender",

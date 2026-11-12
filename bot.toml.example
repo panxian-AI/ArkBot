@@ -16,6 +16,18 @@ reconnect_interval = 3.0      # 断线初始重连间隔（指数退避，上限
 # app_id = "102345678"
 # app_secret = "your-secret"
 
+# 第三方协议（可选）——装包后用名字，或用点分路径指模块
+#   pip install arklink   → 提供 Milky 1.3 / Satori v1 / QQ NT 原生（研究态）
+# [[adapters]]
+# type = "milky"                         # 等价于 "arklink.milky:MilkyAdapter"
+# base_url = "http://127.0.0.1:3000"
+# access_token = ""
+#
+# [[adapters]]
+# type = "satori"
+# api_base = "http://127.0.0.1:5140"
+# platform = "qq"
+
 [bot]
 log_level = "INFO"
 plugins_dir = "plugins"

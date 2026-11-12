@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arkbot"
-version = "0.3.0"
+version = "0.4.0"
 description = "Anti-ban QQ bot framework: pluggable adapters (OneBot 11 + official QQ API), dual-channel seamless failover, offline outbox, NG microkernel with legacy plugin compatibility"
 readme = "README.md"
 requires-python = ">=3.11"

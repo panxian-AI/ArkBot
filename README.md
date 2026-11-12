@@ -195,7 +195,7 @@ class Echo(Plugin):
 ## 端到端验证
 
 ```bash
-pytest tests/unit -q                    # 98 项单测（消息/规则/调度/持久化/聊天集成/兼容层）
+pytest tests/unit -q                    # 109 项单测（消息/规则/调度/持久化/聊天集成/兼容层/适配器加载器）
 
 python tests/e2e/e2e_test.py            # 单通道（OneBot）全链路
 python tests/e2e/failover_test.py       # 双通道抗 ban：OneBot 被 ban → 官方通道无感接管
@@ -222,6 +222,28 @@ failover 测试模拟真实事故链：OneBot 实现在线服务 → 瞬间死�
 | [bot.toml.example](bot.toml.example) | 所有配置项的注释示例 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 最短贡献路径：环境、自测命令、改动放哪、PR 约定 |
 
+## 协议外挂层：[ArkLink](https://github.com/panxian-AI/ArkLink)
+
+内核不绑定任何协议。第三方仓库通过 **entry point** 或**点分路径**把新协议挂进来，
+插件一行不改：
+
+```toml
+[[adapters]]
+type = "milky"                              # pip install arklink 后即可用
+base_url = "http://127.0.0.1:3000"
+access_token = "xxx"
+
+# 或者不装包，直接指模块
+# type = "arklink.milky:MilkyAdapter"
+```
+
+ArkLink 已实现：**Milky 1.3**（NapCat / Lagrange / Acidify）、
+**Satori v1**（Koishi / Chronocat）、以及 **QQ NT 原生协议的逆向工具箱**
+（TEA / SSO 封包 / protobuf / qsign，研究态）。
+
+加载规则在 `arkbot/adapters/loader.py`：内置类型 → entry point group
+`arkbot.adapters` → `"pkg.mod:Class"`，都不匹配时给出可用列表与写法提示。
+
 ## 目录结构
 
 ```
@@ -242,13 +264,13 @@ arkbot/
 │   └── onebot11.py   # ★ 兼容层：对外扮演 OneBot 11 实现
 └── adapters/
     ├── base.py       # ★ 适配器抽象接口 + 回复路由契约
+    ├── loader.py     # ★ 适配器加载器（内置 / entry point / 点分路径）
     ├── onebot11.py   # OneBot 11 正向 WS 适配器
     └── official_qq.py# QQ 官方开放平台适配器（封禁兜底）
 arkbot2/              # NG 微内核（旧插件零改动兼容）
 plugins/              # 插件（echo / groupkit / status / ai_chat）
 docs/
-├── guides/           # 接入文档：OneBot 兼容层 / AI 聊天 / 共创指南
-└── media/            # B 站演示视频物料与放映页
+└── guides/           # 接入文档：OneBot 兼容层 / AI 聊天 / 协议与共创指南
 tests/
 ├── unit/             # pytest 单测（纯逻辑）
 ├── e2e/              # 链路脚本（假服务端 + 全流程断言）
@@ -256,12 +278,19 @@ tests/
 tools/                # 维护脚本（无 workflow scope 时的 API 推送）
 ```
 
-## 写一个新适配器（例如未来的 native-qq）
+## 写一个新适配器
 
-```python
-class NativeQQAdapter(Adapter):
-    async def connect(self): ...      # 连 QQ，收到事件包装成 Event 后 _emit()
-    async def call_api(self, action, params): ...  # 返回与 OneBot 同构的 data
+两条路，都不需要改内核：
+
+1. **同一个仓库**：继承 `Adapter`，然后在 `adapters/loader.py` 里 `register("你的名字", 工厂)`；
+2. **独立仓库**（推荐，参考 ArkLink）：声明 entry point
+
+```toml
+[project.entry-points."arkbot.adapters"]
+my-proto = "my_pkg.adapter:create"
 ```
+
+适配器只需要实现两件事：`connect()` 里把协议事件翻译成统一事件后 `_emit()`，
+`call_api()` 里把 OneBot 动作名映射到你的协议（不支持的抛 `1404`）。
 
 在 `Config.build_adapter()` 注册即可。插件世界毫无波澜。
