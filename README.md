@@ -222,6 +222,24 @@ failover 测试模拟真实事故链：OneBot 实现在线服务 → 瞬间死�
 | [bot.toml.example](bot.toml.example) | 所有配置项的注释示例 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 最短贡献路径：环境、自测命令、改动放哪、PR 约定 |
 
+## 两个仓库的关系
+
+本仓库是**业务框架**，[ArkLink](https://github.com/panxian-AI/ArkLink) 是**协议外挂层**：
+
+| | ArkBot（本仓库） | ArkLink |
+|---|---|---|
+| 管什么 | 机器人**做什么**：插件、规则、消息链、调度、发件箱、官方通道、OneBot 兼容层 | 机器人**怎么连上 QQ**：Milky / Satori / ntqq-hook / ntqq-native / ntqq-client / OneBot 服务端 |
+| 依赖 | **不 import arklink**（靠 entry point 发现适配器） | 运行时才 `from arkbot.event import Event`，没有硬依赖 |
+| 版本 | 0.4.0 | 0.6.0（独立发版） |
+| 能单独装吗 | 能（用官方 Bot 通道） | 能（`arklink serve onebot` 直接替 NapCat） |
+
+一句话判断某段代码该放哪：**「换一种连 QQ 的方式，这段代码要不要改？」**
+要改 → ArkLink；不改 → ArkBot。
+
+两者组合是完整形态：插件写在 ArkBot，通道由 ArkLink 提供，换通道插件零改动。
+依赖方向、版本兼容、出问题怎么定位，见 ArkLink 的
+[docs/两个仓库的关系.md](https://github.com/panxian-AI/ArkLink/blob/main/docs/两个仓库的关系.md)。
+
 ## 协议外挂层：[ArkLink](https://github.com/panxian-AI/ArkLink)
 
 内核不绑定任何协议。第三方仓库通过 **entry point** 或**点分路径**把新协议挂进来，
