@@ -106,7 +106,9 @@ class Bot:
                     logger.warning("发件箱消息过期丢弃: %s", item["action"])
                     continue
                 try:
-                    await self._raw_call(item["action"], item["params"])
+                    # allow_outbox=False：补发失败要「留在队列里」，不能重新入队
+                    # （否则每轮补发都会产生新副本，队列永远清不空）
+                    await self._raw_call(item["action"], item["params"], allow_outbox=False)
                     logger.info("发件箱消息已补发: %s", item["action"])
                 except Exception:
                     still_pending.append(item)
@@ -164,7 +166,9 @@ class Bot:
         raise RuntimeError(f"所有通道均无法回复（最后错误: {last_err}）")
 
     # ---------- 底层 ----------
-    async def _raw_call(self, action: str, params: dict[str, Any], via: Any = None) -> Any:
+    async def _raw_call(
+        self, action: str, params: dict[str, Any], via: Any = None, allow_outbox: bool = True
+    ) -> Any:
         candidates = [via] if via is not None else []
         candidates += [c for c in self.channels if c is not via]
         last_err: Exception | None = None
@@ -181,7 +185,7 @@ class Bot:
                     continue
                 last_err = e
                 logger.warning("通道 %s 调用 %s 失败: %s", c.name, action, e)
-        if action.startswith("send_"):
+        if action.startswith("send_") and allow_outbox:
             self._enqueue_outbox(action, params)
             return None
         raise RuntimeError(f"无可用通道完成 {action}（最后错误: {last_err}）")

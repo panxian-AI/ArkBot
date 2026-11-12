@@ -101,7 +101,9 @@ class Bot:
                     logger.warning("发件箱消息过期丢弃: %s", item["action"])
                     continue
                 try:
-                    await self.call_api(item["action"], **item["params"])
+                    # _allow_outbox=False：补发失败要「留在队列里」，不能重新入队
+                    # （否则每轮补发都会产生新副本，队列永远清不空）
+                    await self.call_api(item["action"], _allow_outbox=False, **item["params"])
                     logger.info("发件箱消息已补发: %s", item["action"])
                 except Exception:
                     still_pending.append(item)
@@ -163,7 +165,9 @@ class Bot:
         raise ApiError("reply", -1, f"所有通道均无法回复（最后错误: {last_err}）")
 
     # ---------- 底层 ----------
-    async def call_api(self, action: str, via: Adapter | None = None, **params: Any) -> Any:
+    async def call_api(
+        self, action: str, via: Adapter | None = None, _allow_outbox: bool = True, **params: Any
+    ) -> Any:
         """调用指定/默认通道的 API。默认路由到第一个健康通道，失败逐个降级。"""
         candidates: list[Adapter] = [via] if via is not None else []
         candidates += [a for a in self.adapters if a is not via]
@@ -183,7 +187,7 @@ class Bot:
                 last_err = e
                 logger.warning("通道 %s 调用 %s 失败: %s", a.name, action, e)
         # 所有通道都无法完成该动作（不可达或不支持）：主动消息入发件箱补发
-        if action.startswith("send_"):
+        if action.startswith("send_") and _allow_outbox:
             self._enqueue_outbox(action, params)
             return None
         raise ApiError(action, -1, f"无可用通道（最后错误: {last_err}）")
