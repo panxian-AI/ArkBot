@@ -4,6 +4,9 @@
 
 [![CI](https://github.com/panxian-AI/ArkBot/actions/workflows/ci.yml/badge.svg)](https://github.com/panxian-AI/ArkBot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![ArkLink](https://img.shields.io/badge/%E5%A7%8A%E5%A6%B9%E4%BB%93%E5%BA%93-ArkLink-2BC49A)](https://github.com/panxian-AI/ArkLink)
+
+> **姊妹仓库**：[ArkLink](https://github.com/panxian-AI/ArkLink) 是协议外挂层 —— 本仓库管「机器人做什么」，它管「怎么连上 QQ」。插件写在这里，通道（Milky / Satori / ntqq-hook / 客户端直发）由它提供；两者依赖单向、版本独立、可各自单独安装。
 
 ## 为什么是 ArkBot
 
@@ -230,7 +233,7 @@ failover 测试模拟真实事故链：OneBot 实现在线服务 → 瞬间死�
 |---|---|---|
 | 管什么 | 机器人**做什么**：插件、规则、消息链、调度、发件箱、官方通道、OneBot 兼容层 | 机器人**怎么连上 QQ**：Milky / Satori / ntqq-hook / ntqq-native / ntqq-client / OneBot 服务端 |
 | 依赖 | **不 import arklink**（靠 entry point 发现适配器） | 运行时才 `from arkbot.event import Event`，没有硬依赖 |
-| 版本 | 0.4.0 | 0.6.0（独立发版） |
+| 版本 | 0.4.0 | 0.12.0（独立发版） |
 | 能单独装吗 | 能（用官方 Bot 通道） | 能（`arklink serve onebot` 直接替 NapCat） |
 
 一句话判断某段代码该放哪：**「换一种连 QQ 的方式，这段代码要不要改？」**
