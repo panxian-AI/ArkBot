@@ -93,6 +93,9 @@ heartbeat_interval = 30
 **[docs/guides/OneBot兼容层.md](docs/guides/OneBot兼容层.md)** ·
 AstrBot 单独一篇：**[docs/guides/AstrBot接入.md](docs/guides/AstrBot接入.md)**。
 
+> 不需要 ArkBot 的插件、只想把 ArkLink 的 QQ 通道接到 AstrBot？
+> 用更轻的 [ArkBridge](https://github.com/panxian-AI/ArkBridge)：零依赖纯中继，一条命令。
+
 ## ArkBot NG —— 全新微内核（`arkbot2/`）
 
 基于 2026-11 依赖调研（`python -m arkbot2 --capabilities` 可查看候选清单）重写的运行时，

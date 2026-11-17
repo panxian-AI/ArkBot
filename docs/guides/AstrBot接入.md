@@ -7,6 +7,9 @@
 > 那份文档是「ArkBot 的 QQ 消息**送进** AstrBot 的 Agent」；
 > 这份是「AstrBot 整个当**上层软件**，通过 OneBot 11 接管 ArkBot 的收发」。
 > 两者可以同时开，但别让两边都对同一条消息自动回复（见文末「边界」）。
+>
+> 只想「把 QQ 通道接到 AstrBot」、不需要 ArkBot 的插件与发件箱？用更轻的
+> [ArkBridge](https://github.com/panxian-AI/ArkBridge)：零依赖纯中继，`python -m arkbridge run` 一条命令。
 
 ## 1. 为什么是「反向 WS」
 
