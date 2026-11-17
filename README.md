@@ -65,7 +65,7 @@ host = "127.0.0.1"
 port = 6800
 access_token = "your-token"
 heartbeat_interval = 30
-# reverse_urls = ["ws://127.0.0.1:6199/ws"]                    # 反向 WS（AstrBot / NoneBot 反向）
+# reverse_urls = ["astrbot://127.0.0.1:6199"]                  # 反向 WS（AstrBot / NoneBot 反向）
 # http_report_urls = ["http://127.0.0.1:8080/onebot/event"]    # HTTP 上报
 ```
 
@@ -82,8 +82,16 @@ heartbeat_interval = 30
 所以底层换实现、走官方兜底、甚至全通道掉线进发件箱，上层软件都感知不到
 （`send_*` 照常返回 `retcode=0` + 消息 ID，恢复后自动补发）。
 
+**AstrBot 是重点照顾对象**：它处理每条带 @ 的群消息都会同步反问
+`get_group_member_info`，收到引用段会回查 `get_msg`。下游换成官方通道时这两个接口
+不存在，其它框架往往当场抛错、整条消息被丢弃。ArkBot 的做法是
+「本地真实数据优先 → 透传下游 → 最后给结构合法的空档案」，
+所以群里 @ 机器人、引用回复在官方兜底通道上照样成立
+（`tests/e2e/astrbot_test.py`，18 项断言，对端是真实的 `aiocqhttp`）。
+
 细节、API 覆盖表、NoneBot2/Koishi/AstrBot 的具体配置、排障：
-**[docs/guides/OneBot兼容层.md](docs/guides/OneBot兼容层.md)**。
+**[docs/guides/OneBot兼容层.md](docs/guides/OneBot兼容层.md)** ·
+AstrBot 单独一篇：**[docs/guides/AstrBot接入.md](docs/guides/AstrBot接入.md)**。
 
 ## ArkBot NG —— 全新微内核（`arkbot2/`）
 
@@ -203,6 +211,7 @@ pytest tests/unit -q                    # 109 项单测（消息/规则/调度/�
 python tests/e2e/e2e_test.py            # 单通道（OneBot）全链路
 python tests/e2e/failover_test.py       # 双通道抗 ban：OneBot 被 ban → 官方通道无感接管
 python tests/e2e/compat_test.py         # 上层 OneBot 软件 → ArkBot → 下游 OneBot 实现
+python tests/e2e/astrbot_test.py        # AstrBot 接入：真实 aiocqhttp 当对端（需 pip install aiocqhttp）
 python tests/e2e/arkbot2_compat_test.py # 旧插件零改动跑在新内核
 python tests/e2e/persist_test.py        # 持久化：重启后发件箱与 openid 映射恢复
 python tests/e2e/ai_chat_test.py        # AstrBot / DSH 聊天链路（含 SSE 拼接、养鱼模式、冷却、分段）
@@ -220,6 +229,7 @@ failover 测试模拟真实事故链：OneBot 实现在线服务 → 瞬间死�
 | 文档 | 内容 |
 |------|------|
 | [docs/guides/OneBot兼容层.md](docs/guides/OneBot兼容层.md) | 让 NoneBot2 / Koishi / AstrBot / 老脚本直连 ArkBot：四种接法、API 表、排障 |
+| [docs/guides/AstrBot接入.md](docs/guides/AstrBot接入.md) | AstrBot 当上层软件的完整接法：反向 WS、它反查哪些接口、三个真实坑、排障 |
 | [docs/guides/AI聊天接入.md](docs/guides/AI聊天接入.md) | AstrBot / DSH 养鱼接入、命令、配置全表、自己加后端、排障 |
 | [docs/guides/共创指南.md](docs/guides/共创指南.md) | 分层契约、代码地图、插件/适配器写法、测试与 PR 清单、good first issue |
 | [bot.toml.example](bot.toml.example) | 所有配置项的注释示例 |
@@ -233,7 +243,7 @@ failover 测试模拟真实事故链：OneBot 实现在线服务 → 瞬间死�
 |---|---|---|
 | 管什么 | 机器人**做什么**：插件、规则、消息链、调度、发件箱、官方通道、OneBot 兼容层 | 机器人**怎么连上 QQ**：Milky / Satori / ntqq-hook / ntqq-native / ntqq-client / OneBot 服务端 |
 | 依赖 | **不 import arklink**（靠 entry point 发现适配器） | 运行时才 `from arkbot.event import Event`，没有硬依赖 |
-| 版本 | 0.4.0 | 0.12.0（独立发版） |
+| 版本 | 0.4.1 | 0.12.0（独立发版） |
 | 能单独装吗 | 能（用官方 Bot 通道） | 能（`arklink serve onebot` 直接替 NapCat） |
 
 一句话判断某段代码该放哪：**「换一种连 QQ 的方式，这段代码要不要改？」**

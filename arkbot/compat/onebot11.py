@@ -73,7 +73,7 @@ class OneBot11Server:
         self.host = host
         self.port = int(port)
         self.access_token = access_token or None
-        self.reverse_urls = [u for u in reverse_urls if u]
+        self.reverse_urls = [_expand_reverse_url(u) for u in reverse_urls if u]
         self.http_report_urls = [u for u in http_report_urls if u]
         self.heartbeat_interval = float(heartbeat_interval or 0)
         self._self_id_override = int(self_id or 0)
@@ -87,6 +87,17 @@ class OneBot11Server:
         self._msg_seq = itertools.count(1)
         self._sent: dict[int, dict[str, Any]] = {}
         self._event_count = 0
+        # 本地知识库：从真实事件里学到的成员信息 / 消息快照。
+        # 上层软件（尤其 AstrBot）会在处理一条消息时同步反问「这个人是谁」
+        # 「这条被引用的消息是什么」，下游通道不一定答得上来（官方通道压根没这些接口）。
+        # 有缓存就先答，答不上来也不报错 —— 详见 _api_member_info 的注释。
+        self._members: dict[tuple[int, int], dict[str, Any]] = {}
+        self._strangers: dict[int, dict[str, Any]] = {}
+        self._known_msgs: dict[int, dict[str, Any]] = {}
+        self._warned_no_self_id = False
+
+    MEMBER_CACHE_MAX = 2000
+    MSG_CACHE_MAX = 500
 
     def _spawn(self, coro: Any, name: str | None = None) -> asyncio.Task[Any]:
         """托管后台任务：随 server 一起取消，结束后自动出表。"""
@@ -116,7 +127,9 @@ class OneBot11Server:
             "OneBot 11 兼容层已就绪：ws://%s:%d/  http://%s:%d/  （NoneBot2 / Koishi / AstrBot / 老脚本可直接接入）",
             self.host, self.port, self.host, self.port,
         )
+        await self._resolve_self_id()
         for url in self.reverse_urls:
+            logger.info("反向 WS 目标: %s", url)
             self._spawn(self._reverse_loop(url), f"ark-compat-rev-{url}")
         if self.heartbeat_interval > 0:
             self._spawn(self._heartbeat_loop(), "ark-compat-heartbeat")
@@ -156,6 +169,36 @@ class OneBot11Server:
             return self._self_id_override
         bot = getattr(self.app, "bot", None)
         return int(getattr(bot, "self_id", 0) or 0)
+
+    async def _resolve_self_id(self) -> None:
+        """self_id 未知时向下游问一次（不阻塞启动，失败就算了）。
+
+        上层软件（尤其 AstrBot）用 self_id 判断「这条消息是不是 @ 我」，
+        拿 0 会让群里 @ 机器人彻底失效，所以值得主动补一次。
+        """
+        if self._self_id():
+            return
+        bot = getattr(self.app, "bot", None)
+        if bot is None:
+            return
+        try:
+            info = await asyncio.wait_for(bot.call_api("get_login_info"), timeout=5)
+        except Exception:
+            return
+        try:
+            uid = int((info or {}).get("user_id") or 0)
+        except (TypeError, ValueError, AttributeError):
+            return
+        if uid:
+            self._self_id_override = uid
+            try:
+                bot.self_id = uid
+            except Exception:
+                pass
+            nickname = (info or {}).get("nickname")
+            if nickname:
+                self.nickname = str(nickname)
+            logger.info("兼容层已从下游取得 self_id=%d（%s）", uid, self.nickname)
 
     def _online(self) -> bool:
         bot = getattr(self.app, "bot", None)
@@ -280,8 +323,16 @@ class OneBot11Server:
                 }
                 if self.access_token:
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                async with websockets.connect(
-                    url, additional_headers=headers, max_size=64 * 1024 * 1024, ping_interval=20
+                if not self._self_id() and not self._warned_no_self_id:
+                    self._warned_no_self_id = True
+                    # aiocqhttp 用 X-Self-ID 做 API 路由键；0 不是合法 QQ 号，
+                    # AstrBot 的「是否 @ 了我」判断也依赖它，所以这里必须提醒
+                    logger.warning(
+                        "兼容层 self_id 为 0：AstrBot 的 @ 判定与多账号路由会失准。"
+                        "请在 [compat] self_id 里显式填写机器人 QQ 号"
+                    )
+                async with _ws_connect(
+                    url, headers=headers, max_size=64 * 1024 * 1024, ping_interval=20
                 ) as ws:
                     backoff = 3.0
                     conn = _ReverseConn(ws, url)
@@ -295,7 +346,9 @@ class OneBot11Server:
                             except (json.JSONDecodeError, TypeError):
                                 continue
                             if isinstance(data, dict) and "action" in data:
-                                await self._answer(conn, data)
+                                # 单独建任务：一条慢 API 不能卡住后面的请求
+                                # （aiocqhttp 的 api_timeout 是 180s，串行会连锁超时）
+                                self._spawn(self._answer(conn, data))
                     finally:
                         self._clients.discard(conn)
             except asyncio.CancelledError:
@@ -314,6 +367,7 @@ class OneBot11Server:
         if not self._running:
             return
         payload = self.to_onebot_event(event)
+        self._remember(payload)
         self._event_count += 1
         clients = list(self._clients)
         if clients:
@@ -322,6 +376,53 @@ class OneBot11Server:
             )
         for url in self.http_report_urls:
             self._spawn(self._post_report(url, payload), "ark-compat-report")
+
+    # ================= 本地知识库 =================
+
+    def _remember(self, payload: dict[str, Any]) -> None:
+        """从推给上层的事件里留存「成员信息」和「消息快照」。
+
+        只缓存真实发生过的数据（事件里带来的 sender / message），不猜、不造。
+        作用是让上层软件反问 `get_group_member_info` / `get_msg` 时，
+        即使下游通道不支持这些接口，也能拿到真实答案。
+        """
+        post_type = payload.get("post_type")
+        if post_type != "message":
+            return
+        try:
+            mid = int(payload.get("message_id") or 0)
+            uid = int(payload.get("user_id") or 0)
+            gid = int(payload.get("group_id") or 0)
+        except (TypeError, ValueError):
+            return
+        if mid:
+            self._known_msgs[mid] = payload
+            if len(self._known_msgs) > self.MSG_CACHE_MAX:
+                for key in list(self._known_msgs)[: self.MSG_CACHE_MAX // 4]:
+                    self._known_msgs.pop(key, None)
+        sender = payload.get("sender") or {}
+        if not uid or not isinstance(sender, dict):
+            return
+        info = {
+            "user_id": uid,
+            "nickname": str(sender.get("nickname") or ""),
+            "card": str(sender.get("card") or ""),
+            "sex": str(sender.get("sex") or "unknown"),
+            "age": int(sender.get("age") or 0),
+            "area": str(sender.get("area") or ""),
+            "level": str(sender.get("level") or ""),
+            "role": str(sender.get("role") or "member"),
+            "title": str(sender.get("title") or ""),
+        }
+        self._strangers[uid] = info
+        if gid:
+            self._members[(gid, uid)] = info
+            if len(self._members) > self.MEMBER_CACHE_MAX:
+                for key in list(self._members)[: self.MEMBER_CACHE_MAX // 4]:
+                    self._members.pop(key, None)
+        if len(self._strangers) > self.MEMBER_CACHE_MAX:
+            for key in list(self._strangers)[: self.MEMBER_CACHE_MAX // 4]:
+                self._strangers.pop(key, None)
 
     async def _safe_send(self, conn: Any, payload: dict[str, Any]) -> None:
         try:
@@ -456,21 +557,33 @@ class OneBot11Server:
                 return 0, {"token": 0}, ""
             if action == "get_cookies":
                 return 0, {"cookies": ""}, ""
-            if action in ("set_restart", "clean_cache", "handle_quick_operation"):
+            if action in ("set_restart", "clean_cache"):
+                return 0, None, ""
+            if action in ("handle_quick_operation", "handle_quick_operation_async"):
+                # aiocqhttp 在事件处理函数返回 dict 时会回灌这个动作，空操作即可
                 return 0, None, ""
             if action in ("send_msg", "send_private_msg", "send_group_msg"):
                 return await self._api_send(action, params)
+            if action in ("get_group_member_info", "get_stranger_info"):
+                return await self._api_member_info(action, params)
             if action == "delete_msg":
                 mid = int(params.get("message_id") or 0)
                 await self.app.bot.delete_msg(mid)
                 self._sent.pop(mid, None)
+                self._known_msgs.pop(mid, None)
                 return 0, None, ""
             if action == "get_msg":
                 mid = int(params.get("message_id") or 0)
-                cached = self._sent.get(mid)
-                if cached is not None:
-                    return 0, cached, ""
-                return 0, await self.app.bot.get_msg(mid), ""
+                # 先答「自己发过的」和「刚收到过的」——上层软件（AstrBot 的引用回复）
+                # 会在处理消息的同一时刻同步回查，依赖下游必有回执是不现实的
+                for cache in (self._sent, self._known_msgs):
+                    cached = cache.get(mid)
+                    if cached is not None:
+                        return 0, cached, ""
+                try:
+                    return 0, await self.app.bot.get_msg(mid), ""
+                except ApiError:
+                    return 0, {}, ""
             # 其余动作全部透传给下游通道：接的是 OneBot 实现就原生支持，
             # 接的是官方 QQ 时由官方适配器尽力翻译，不支持的返回 1404。
             return 0, await self.app.bot.call_api(action, **self._clean_params(params)), ""
@@ -485,6 +598,57 @@ class OneBot11Server:
         except Exception as e:
             logger.exception("兼容层执行 %s 失败", action)
             return 100, None, str(e)
+
+    async def _api_member_info(
+        self, action: str, params: dict[str, Any]
+    ) -> tuple[int, Any, str]:
+        """`get_group_member_info` / `get_stranger_info`：先本地、再下游、最后降级。
+
+        为什么不能直接透传：AstrBot（aiocqhttp）在处理**每条带 @ 的群消息**时都会
+        同步调这两个接口问「被 @ 的是谁」。下游是官方 QQ 通道时根本没有这个接口，
+        透传会返回 1404 → AstrBot 的 handler 抛异常 → **整条消息被丢弃**，
+        群里 @ 机器人完全没反应。所以这里的契约是「尽量答，答不上来也给个
+        结构合法的空档案」，让对方能继续往下走。
+        """
+        try:
+            group_id = int(params.get("group_id") or 0)
+            user_id = int(params.get("user_id") or 0)
+        except (TypeError, ValueError):
+            group_id = user_id = 0
+
+        cached = self._members.get((group_id, user_id)) if group_id else None
+        cached = cached or self._strangers.get(user_id)
+        if cached:
+            return 0, dict(cached), ""
+
+        try:
+            data = await self.app.bot.call_api(action, **self._clean_params(params))
+        except ApiError as e:
+            retcode = int(e.retcode or 100)
+            # 下游不认识这个动作 / 没有通道 / 通道限速：降级为「已知 ID、未知昵称」
+            if retcode in (1404, 429, 100, -1) or not self._online():
+                return 0, self._unknown_member(user_id, group_id), ""
+            raise
+        if isinstance(data, dict) and data:
+            return 0, data, ""
+        # 下游返回空（官方通道常见）：同样降级，不让上层软件崩
+        return 0, self._unknown_member(user_id, group_id), ""
+
+    @staticmethod
+    def _unknown_member(user_id: int, group_id: int = 0) -> dict[str, Any]:
+        """结构合法的空档案：字段全在、值未知，上层软件可安全取用。"""
+        return {
+            "user_id": user_id,
+            "nickname": "",
+            "card": "",
+            "sex": "unknown",
+            "age": 0,
+            "area": "",
+            "level": "",
+            "role": "member",
+            "title": "",
+            "group_id": group_id,
+        }
 
     async def _api_send(self, action: str, params: dict[str, Any]) -> tuple[int, Any, str]:
         message = params.get("message")
@@ -512,14 +676,25 @@ class OneBot11Server:
             target = {"message_type": "private", "user_id": user_id}
 
         mid = self._message_id(res)
-        # 记录一条最小可回查的消息，供 get_msg / delete_msg 使用
+        # 记录一条**结构完整**的消息事件，供 get_msg / delete_msg / 引用回复使用。
+        # AstrBot 拿到 get_msg 的返回值会直接 Event.from_payload 重建事件，
+        # 少一个 message_type 都会让引用回复退化成纯文本。
         self._sent[mid] = {
+            "time": int(time.time()),
+            "self_id": self._self_id(),
+            "post_type": "message",
             "message_id": mid,
             "real_id": (res or {}).get("message_id") if isinstance(res, dict) else None,
             "message": chain.to_onebot(),
             "raw_message": chain.to_cq(),
-            "sender": {"user_id": self._self_id()},
-            "time": int(time.time()),
+            "font": 0,
+            "sub_type": "normal" if target["message_type"] == "group" else "friend",
+            "sender": {
+                "user_id": self._self_id(),
+                "nickname": self.nickname,
+                "card": "",
+                "role": "owner",
+            },
             **target,
         }
         if len(self._sent) > 500:
@@ -541,10 +716,16 @@ class OneBot11Server:
         # 避免上层软件因为 data 缺失而报错
         return 1_000_000_000 + next(self._msg_seq)
 
-    @staticmethod
-    def _clean_params(params: dict[str, Any]) -> dict[str, Any]:
+    # 这些字段是上层 SDK 的「协议内路由参数」或本框架的关键字参数，
+    # 透传给下游会导致 TypeError / 语义错乱：
+    #   self_id   aiocqhttp 每个动作都会带上（多账号路由用），单机器人实例不需要
+    #   no_cache  AstrBot 查成员信息时带的分页/缓存开关，OneBot 规范里没有
+    _DROP_PARAMS = ("via", "action", "echo", "self_id", "no_cache", "_allow_outbox")
+
+    @classmethod
+    def _clean_params(cls, params: dict[str, Any]) -> dict[str, Any]:
         """剔除会与 Bot.call_api 关键字参数冲突的字段。"""
-        return {k: v for k, v in params.items() if k not in ("via", "action", "echo")}
+        return {k: v for k, v in params.items() if k not in cls._DROP_PARAMS}
 
     # ================= 杂项 =================
 
@@ -558,6 +739,34 @@ class OneBot11Server:
             await conn.send_json({"post_type": "meta_event", "meta_event_type": "lifecycle",
                                   "sub_type": "disconnect", "self_id": self._self_id(),
                                   "time": int(time.time())})
+
+
+def _expand_reverse_url(url: str) -> str:
+    """`astrbot://127.0.0.1:6199` → `ws://127.0.0.1:6199/ws`。
+
+    AstrBot 的 aiocqhttp 适配器固定监听 `/ws`、`/ws/api`、`/ws/event` 三个路径，
+    而 Universal 角色（一条连接同时收发）只有 `/ws`。写全 URL 容易漏 path，
+    所以给个只填 host:port 的简写。
+    """
+    url = str(url).strip()
+    if not url.lower().startswith("astrbot://"):
+        return url
+    rest = url[len("astrbot://"):].rstrip("/")
+    return f"ws://{rest}/ws"
+
+
+def _ws_connect(url: str, *, headers: dict[str, str], **kwargs: Any) -> Any:
+    """跨 websockets 版本的连接入口。
+
+    14.0 把 `extra_headers` 改名成 `additional_headers`，而 <=13.x 只认旧名字；
+    装错版本会导致反向 WS 一直「连接失败」并无限退避，所以两个名都试。
+    """
+    if websockets is None:  # pragma: no cover
+        raise RuntimeError("未安装 websockets")
+    try:
+        return websockets.connect(url, additional_headers=headers, **kwargs)
+    except TypeError:  # pragma: no cover - 老版本 websockets
+        return websockets.connect(url, extra_headers=headers, **kwargs)
 
 
 class _ReverseConn:

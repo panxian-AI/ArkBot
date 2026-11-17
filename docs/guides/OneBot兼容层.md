@@ -51,6 +51,9 @@ heartbeat_interval = 30    # 心跳间隔（秒），0 = 关闭
 环境变量也可以：`ARKBOT_COMPAT_PORT`、`ARKBOT_COMPAT_TOKEN`。
 `arkbot` 与 `arkbot2` 两套内核都读同一段配置。
 
+`self_id` 不填时兼容层会向下游问一次 `get_login_info` 补上（拿不到会在日志告警）。
+**接 AstrBot 时建议显式填**：它用 `self_id` 判断「这条消息是不是 @ 我」。
+
 ## 4. 四种接法
 
 ### 4.1 正向 WS（最常用）
@@ -97,10 +100,15 @@ asyncio.run(main())
 enabled = true
 port = 6800
 reverse_urls = ["ws://127.0.0.1:6199/ws"]
+# AstrBot 专用简写：自动补 /ws
+# reverse_urls = ["astrbot://127.0.0.1:6199"]
 ```
 
 握手会带 `X-Self-ID` / `X-Client-Role: Universal`，token 走 `Authorization: Bearer`。
 断线自动指数退避重连（上限 60s）。
+
+AstrBot 的接法单独写了一篇（含它处理消息时会反查哪些接口、三个真实坑）：
+**[AstrBot接入.md](AstrBot接入.md)**。
 
 ### 4.3 HTTP API
 
@@ -139,8 +147,15 @@ http_report_urls = ["http://127.0.0.1:8080/onebot/event"]
 | `get_csrf_token` / `get_cookies` | 占位值（官方通道无此概念） |
 | `set_restart` / `clean_cache` / `handle_quick_operation` | 空操作 |
 | `send_msg` / `send_group_msg` / `send_private_msg` | `{message_id}` |
-| `get_msg` | 优先回本地发送记录（发件箱场景拿不到下游回执） |
+| `get_msg` | 优先回本地记录（自己发的 + 刚收到的），再透传；都没有给 `{}` |
+| `get_group_member_info` / `get_stranger_info` | 优先回本地见过的名片/昵称，再透传；都没有给结构合法的空档案 |
 | `delete_msg` | 透传下游；通道不支持时 `retcode=1404` |
+
+**为什么这两个查询要「本地优先」**：AstrBot 处理**每条带 @ 的群消息**都会同步问
+「被 @ 的是谁」，收到引用段会同步回查 `get_msg`。下游是官方 QQ 通道时这两个接口
+根本不存在，透传会返回 1404 → 上层软件抛异常 → **整条消息被丢弃**。
+所以这里的契约是「尽量答，答不上来也给结构合法的空值」，而不是报错。
+细节见 [AstrBot接入.md](AstrBot接入.md)。
 
 **全部透传**给下游通道：`get_group_list`、`get_group_info`、`get_group_member_list`、
 `get_group_member_info`、`get_friend_list`、`get_stranger_info`、`set_group_ban`、
@@ -214,8 +229,13 @@ arkbot/compat/
 
 ```bash
 python tests/e2e/compat_test.py          # 全链路：上层软件 → ArkBot → 假 OneBot 实现
-pytest tests/unit/test_compat_onebot.py -q   # 握手、鉴权、事件格式、HTTP 语义
+python tests/e2e/astrbot_test.py         # AstrBot 专用：真实 aiocqhttp 当对端（18 项）
+pytest tests/unit/test_compat_onebot.py -q   # 握手、鉴权、事件格式、HTTP 语义、降级路径
 ```
 
 `compat_test.py` 里没有任何协议桩：上层用真实 `websockets` 客户端，
 下游用真实 OneBot 实现（`tests/fakes/fake_onebot.py`），中间是真实的 ArkBot。
+
+`astrbot_test.py` 更硬一点：上层是**真实的 `aiocqhttp.CQHttp(use_ws_reverse=True)`**
+（AstrBot 用的就是它），握手头、`echo{seq}` 应答配对、`X-Self-ID` 路由全部由库自己校验，
+ArkBot 错一点就当场暴露。需要 `pip install aiocqhttp quart`，没装则打印 SKIP 退出 0。

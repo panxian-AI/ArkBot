@@ -32,6 +32,13 @@ jobs:
       - name: E2E — OneBot upper-layer compatibility
         run: python tests/e2e/compat_test.py
 
+      - name: Install real AstrBot peer (aiocqhttp)
+        continue-on-error: true
+        run: pip install aiocqhttp quart
+
+      - name: E2E — AstrBot (aiocqhttp) compatibility
+        run: python tests/e2e/astrbot_test.py
+
       - name: E2E — NG kernel legacy-plugin compatibility
         run: python tests/e2e/arkbot2_compat_test.py
 

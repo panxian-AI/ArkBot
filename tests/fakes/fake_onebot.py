@@ -24,6 +24,7 @@ class FakeOneBotServer:
         self.port = port
         self.token = token
         self.received: list[dict] = []      # 收到的所有 API 调用
+        self.slow_send_group = 0.0          # >0 时 send_group_msg 延迟应答（测并发）
         self.echo_seq = 0
         self._clients: set = set()
         self._server = None
@@ -70,13 +71,29 @@ class FakeOneBotServer:
                 except json.JSONDecodeError:
                     continue
                 self.received.append(data)
-                action = data.get("action", "")
-                echo = data.get("echo")
-                resp = self._handle_api(action, data.get("params") or {})
-                resp["echo"] = echo
-                await ws.send(json.dumps(resp, ensure_ascii=False))
+                # 真实实现（NapCat / Lagrange）都是并发应答：慢请求不挡后面的请求。
+                # 用任务而不是 await，才能测出「ArkBot 自己有没有串行」。
+                asyncio.create_task(self._serve_call(ws, data))
         finally:
             self._clients.discard(ws)
+
+    async def _serve_call(self, ws, data: dict):
+        action = data.get("action", "")
+        echo = data.get("echo")
+        # 只对内容含 "slow" 的发送变慢：这样才能把「慢请求」和「紧随其后的快请求」
+        # 区分开，测出框架有没有把后面的请求一起卡住
+        if (
+            self.slow_send_group
+            and action == "send_group_msg"
+            and "slow" in json.dumps(data.get("params") or {}, ensure_ascii=False)
+        ):
+            await asyncio.sleep(self.slow_send_group)
+        resp = self._handle_api(action, data.get("params") or {})
+        resp["echo"] = echo
+        try:
+            await ws.send(json.dumps(resp, ensure_ascii=False))
+        except Exception:
+            pass
 
     # ---------- 模拟 API ----------
     def _handle_api(self, action: str, params: dict) -> dict:

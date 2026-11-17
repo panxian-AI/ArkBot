@@ -19,6 +19,7 @@ from websockets.exceptions import ConnectionClosedError
 from arkbot.adapters.base import ApiError
 from arkbot.app import ArkBot
 from arkbot.compat import OneBot11Server
+from arkbot.compat.onebot11 import _expand_reverse_url
 from arkbot.event import Event
 from arkbot.message import MessageChain
 
@@ -306,5 +307,164 @@ def test_auto_escape_and_cq_message_from_client():
             assert MessageChain.parse("[CQ:face,id=1]").segments[0].type == "face"
         finally:
             await server.stop()
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# AstrBot（aiocqhttp）接入时会同步反问的那些接口 —— 见 docs/guides/AstrBot接入.md
+# ---------------------------------------------------------------------------
+
+
+def test_member_info_degrades_instead_of_failing():
+    """下游没有成员信息接口时，也必须给出结构合法的答案。
+
+    AstrBot 处理每条带 @ 的群消息都会问 `get_group_member_info`；
+    这里报错会让它把**整条消息**丢掉（群里 @ 机器人彻底没反应）。
+    """
+
+    async def run():
+        app, stub, server = make_server()
+        await server.start()
+        try:
+            retcode, data, _ = await server._dispatch(
+                "get_group_member_info",
+                {"group_id": 555, "user_id": 999, "no_cache": False, "self_id": 10000},
+            )
+            assert retcode == 0, "不能返回错误码，否则上层软件会丢弃整条消息"
+            assert data["user_id"] == 999
+            # 字段齐全但值未知 —— 上层可以直接下标取值不炸
+            for key in ("nickname", "card", "role", "sex", "age"):
+                assert key in data
+            # 透传给下游的参数里不该带 aiocqhttp 的私有字段
+            action, params = stub.calls[-1]
+            assert action == "get_group_member_info"
+            assert "self_id" not in params and "no_cache" not in params
+        finally:
+            await server.stop()
+
+    asyncio.run(run())
+
+
+def test_member_info_uses_what_we_actually_saw():
+    """曾经在群里说过话的人，昵称/名片是真实见过的，直接答，不必问下游。"""
+
+    async def run():
+        app, stub, server = make_server()
+        await server.start()
+        try:
+            event = Event.from_raw({
+                "post_type": "message", "message_type": "group", "sub_type": "normal",
+                "message_id": 700, "group_id": 555, "user_id": 999, "self_id": 10000,
+                "message": [{"type": "text", "data": {"text": "hi"}}],
+                "raw_message": "hi",
+                "sender": {"user_id": 999, "nickname": "小明", "card": "小明同学",
+                           "role": "admin", "sex": "male", "age": 18},
+            })
+            await server.push_event(event)
+            before = len(stub.calls)
+
+            retcode, data, _ = await server._dispatch(
+                "get_group_member_info", {"group_id": 555, "user_id": 999}
+            )
+            assert retcode == 0 and data["card"] == "小明同学"
+            assert data["role"] == "admin"
+            assert len(stub.calls) == before, "命中本地缓存就不该再打扰下游"
+
+            # 陌生人也走同一条降级路径，不抛错
+            retcode, data, _ = await server._dispatch(
+                "get_stranger_info", {"user_id": 10086}
+            )
+            assert retcode == 0 and data["user_id"] == 10086
+        finally:
+            await server.stop()
+
+    asyncio.run(run())
+
+
+def test_get_msg_can_recall_received_message():
+    """AstrBot 的引用回复会拿 message_id 回查**收到的**那条消息。"""
+
+    async def run():
+        app, stub, server = make_server()
+        await server.start()
+        try:
+            event = Event.from_raw({
+                "post_type": "message", "message_type": "group", "sub_type": "normal",
+                "message_id": 801, "group_id": 555, "user_id": 999, "self_id": 10000,
+                "time": 1700000000,
+                "message": [{"type": "text", "data": {"text": "被引用的原话"}}],
+                "raw_message": "被引用的原话", "font": 0,
+                "sender": {"user_id": 999, "nickname": "小明", "card": "", "role": "member"},
+            })
+            await server.push_event(event)
+
+            retcode, data, _ = await server._dispatch("get_msg", {"message_id": 801})
+            assert retcode == 0
+            # aiocqhttp 的 Event.from_payload 只看这两个字段，AstrBot 还要 sender
+            assert data["post_type"] == "message" and data["message_type"] == "group"
+            assert data["sender"]["user_id"] == 999
+            assert data["message"] == [{"type": "text", "data": {"text": "被引用的原话"}}]
+
+            # 自己不认识的 id：空对象而不是报错（AstrBot 会走纯文本兜底）
+            retcode, data, _ = await server._dispatch("get_msg", {"message_id": 999999})
+            assert retcode == 0
+        finally:
+            await server.stop()
+
+    asyncio.run(run())
+
+
+def test_aiocqhttp_housekeeping_actions_are_noops():
+    """aiocqhttp 会回灌 `.handle_quick_operation_async`，必须是空操作而不是 1404。"""
+
+    async def run():
+        app, stub, server = make_server()
+        await server.start()
+        try:
+            for action in ("handle_quick_operation_async", "handle_quick_operation"):
+                retcode, _, _ = await server._dispatch(action, {"context": {}, "operation": {}})
+                assert retcode == 0
+        finally:
+            await server.stop()
+
+    asyncio.run(run())
+
+
+def test_astrbot_shorthand_expands_to_ws_path():
+    """`astrbot://host:port` 自动补成 aiocqhttp 反向 WS 的 `/ws`。"""
+
+    app, stub, server = make_server()
+    urls = [_expand_reverse_url(u) for u in (
+        "astrbot://127.0.0.1:6199",
+        "astrbot://127.0.0.1:6199/",
+        "ws://127.0.0.1:6199/ws",
+    )]
+    assert urls[0] == "ws://127.0.0.1:6199/ws"
+    assert urls[1] == "ws://127.0.0.1:6199/ws"
+    assert urls[2] == "ws://127.0.0.1:6199/ws"
+
+
+def test_self_id_is_learned_from_downstream_when_missing():
+    """self_id 没配时向下游问一次：AstrBot 的「@ 我了吗」全靠它。"""
+
+    async def run():
+        app, stub, server = make_server()
+        app.bot.self_id = 0
+        server._self_id_override = 0
+        stub.calls.clear()
+
+        async def call_api(action, params=None):
+            stub.calls.append((action, params or {}))
+            if action == "get_login_info":
+                return {"user_id": 12345, "nickname": "方舟"}
+            raise ApiError(action, 1404, "不支持")
+
+        stub.call_api = call_api
+        await server._resolve_self_id()
+        assert server._self_id() == 12345
+        assert app.bot.self_id == 12345
+        assert server.nickname == "方舟"
+        await server.stop()
 
     asyncio.run(run())
